@@ -95,7 +95,7 @@ if exist "%PYTHON%" (
 echo Using virtual environment Python: "%PYCMD%"
 
 echo.
-echo Installing and validating dependencies...
+echo Installing and validating Python dependencies...
 "%PYCMD%" -m pip install --upgrade pip setuptools wheel
 "%PYCMD%" -m pip install -r "%REQUIREMENTS%"
 

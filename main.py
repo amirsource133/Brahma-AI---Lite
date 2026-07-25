@@ -3,6 +3,7 @@ import threading
 import json
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -39,19 +40,20 @@ from actions.youtube_video     import youtube_video
 from actions.desktop           import desktop_control
 from actions.browser_control   import browser_control
 from actions.file_controller   import file_controller
-from actions.code_helper       import code_helper
-from actions.dev_agent         import dev_agent
+from actions.website_builder   import website_builder
 from actions.office_builder     import create_presentation, create_spreadsheet
 from actions.docx_tools        import word_document
 from actions.pdf_tools         import create_pdf
-from actions.website_builder   import website_builder
+from PyQt6.QtCore import QTimer
 from actions.web_search        import web_search as web_search_action
 from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
-from actions.attention_monitor import AttentionMonitor, speak_native, handle_call_action, read_event_preview
+from actions.attention_monitor import AttentionMonitor, speak_native, stop_native_speech, handle_call_action, read_event_preview
+from actions.daily_briefing import compile_daily_briefing
 from or_client import client as openrouter_client
 from workspace_store import store as workspace_store
 from smart_home.service import SmartHomeService
+from plugin_manager import PluginManager
 
 try:
     from dashboard.server import DashboardServer
@@ -82,6 +84,12 @@ def _get_api_key() -> str:
         return json.load(f)["gemini_api_key"]
 
 
+def _is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.25)
+        return sock.connect_ex((host, port)) == 0
+
+
 def _startup_log(message: str) -> None:
     try:
         STARTUP_LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -100,7 +108,15 @@ def _ensure_desktop_shortcut() -> None:
         return
 
     try:
-        desktop_dir = Path(os.path.expanduser("~")) / "Desktop"
+        import winreg
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders")
+            desktop_raw, _ = winreg.QueryValueEx(key, "Desktop")
+            winreg.CloseKey(key)
+            desktop_dir = Path(os.path.expandvars(desktop_raw))
+        except Exception:
+            desktop_dir = Path(os.path.expanduser("~")) / "Desktop"
+            
         desktop_dir.mkdir(parents=True, exist_ok=True)
         shortcut_path = desktop_dir / "Brahma AI - Lite.lnk"
         script_path = BASE_DIR / "main.py"
@@ -160,8 +176,29 @@ def _load_system_prompt() -> str:
         return (
             "You are Brahma AI - Lite, a calm, direct, and professional AI assistant. "
             "Be concise, direct, and always use the provided tools to complete tasks. "
-            "Never simulate or guess results — always call the appropriate tool."
+            "Never simulate or guess results — always call the appropriate tool. "
+            "If the user asks to create, build, launch, or open a website, always use the selected workspace folder."
         )
+
+
+def _speak_daily_briefing(ui=None) -> None:
+    """Build and speak a fresh briefing after every application launch."""
+    try:
+        settings_path = BASE_DIR / "config" / "app_settings.json"
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        except Exception:
+            settings = {}
+        briefing = compile_daily_briefing(settings)
+        if briefing:
+            print("[DailyBriefing] Speaking startup briefing")
+            if ui is not None:
+                ui.show_daily_briefing(briefing)
+            speak_native(briefing)
+            if ui is not None:
+                ui.schedule_daily_briefing_hide()
+    except Exception as exc:
+        print(f"[DailyBriefing] Startup briefing failed: {exc}")
     
 def _extract_gemini_text(response) -> str:
     text_parts: list[str] = []
@@ -202,6 +239,35 @@ def _gemini_text_reply(prompt: str) -> str:
         config={"temperature": 0.6},
     )
     return _extract_gemini_text(response)
+
+
+def _looks_like_code_request(text: str) -> bool:
+    low = (text or "").lower()
+    code_words = (
+        "build", "create", "write", "implement", "code", "python", "app",
+        "module", "function", "class", "project", "script", "api",
+        "ui", "webpage", "bot", "server", "service"
+    )
+    return any(word in low for word in code_words)
+
+
+def _looks_like_website_request(text: str) -> bool:
+    low = (text or "").lower()
+    website_words = (
+        "website",
+        "web site",
+        "landing page",
+        "homepage",
+        "home page",
+        "portfolio",
+        "product site",
+        "business site",
+        "marketing site",
+        "web app",
+        "frontend",
+        "site",
+    )
+    return any(word in low for word in website_words)
 
 
 def _is_gemini_limit_error(exc: Exception) -> bool:
@@ -555,38 +621,6 @@ TOOL_DECLARATIONS = [
         }
     },
     {
-        "name": "code_helper",
-        "description": "Writes, edits, explains, runs, or builds code files.",
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "action":      {"type": "STRING", "description": "write | edit | explain | run | build | auto (default: auto)"},
-                "description": {"type": "STRING", "description": "What the code should do or what change to make"},
-                "language":    {"type": "STRING", "description": "Programming language (default: python)"},
-                "output_path": {"type": "STRING", "description": "Where to save the file"},
-                "file_path":   {"type": "STRING", "description": "Path to existing file for edit/explain/run/build"},
-                "code":        {"type": "STRING", "description": "Raw code string for explain"},
-                "args":        {"type": "STRING", "description": "CLI arguments for run/build"},
-                "timeout":     {"type": "INTEGER", "description": "Execution timeout in seconds (default: 30)"},
-            },
-            "required": ["action"]
-        }
-    },
-    {
-        "name": "dev_agent",
-        "description": "Builds complete multi-file projects from scratch: plans, writes files, installs deps, opens VSCode, runs and fixes errors.",
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "description":  {"type": "STRING", "description": "What the project should do"},
-                "language":     {"type": "STRING", "description": "Programming language (default: python)"},
-                "project_name": {"type": "STRING", "description": "Optional project folder name"},
-                "timeout":      {"type": "INTEGER", "description": "Run timeout in seconds (default: 30)"},
-            },
-            "required": ["description"]
-        }
-    },
-    {
         "name": "agent_task",
         "description": (
             "Executes complex multi-step tasks requiring multiple different tools. "
@@ -904,34 +938,6 @@ TOOL_DECLARATIONS = [
         }
     },
     {
-        "name": "website_builder",
-        "description": (
-            "Creates polished, responsive static websites from a brief or structured input. "
-            "Use for landing pages, portfolios, business sites, product sites, and any request to build a real website."
-        ),
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "action": {
-                    "type": "STRING",
-                    "description": "create | open | launch (default: create)"
-                },
-                "site_name": {"type": "STRING", "description": "Website or brand name"},
-                "title": {"type": "STRING", "description": "Website title"},
-                "brief": {"type": "STRING", "description": "Short website brief or product description"},
-                "description": {"type": "STRING", "description": "Detailed website brief"},
-                "style": {"type": "STRING", "description": "Visual style such as modern, luxury, futuristic, minimal, bold"},
-                "audience": {"type": "STRING", "description": "Target audience"},
-                "tone": {"type": "STRING", "description": "Brand tone"},
-                "palette": {"type": "OBJECT", "description": "Optional theme colors"},
-                "pages": {"type": "ARRAY", "items": {"type": "OBJECT"}, "description": "Optional page definitions"},
-                "output_dir": {"type": "STRING", "description": "Optional output folder for the generated site"},
-                "auto_open": {"type": "BOOLEAN", "description": "Open the website after creation (default: true)"},
-            },
-            "required": ["action"]
-        }
-    },
-    {
         "name": "shutdown_brahma",
         "description": (
             "Shuts down the assistant completely. "
@@ -979,7 +985,7 @@ TOOL_DECLARATIONS = [
 
 class BrahmaLive:
 
-    def __init__(self, ui: BrahmaUI, dashboard=None, dashboard_started: bool = False):
+    def __init__(self, ui: BrahmaUI, dashboard=None, dashboard_started: bool = False, enable_dashboard: bool = True):
         self.ui             = ui
         self._smart_home    = SmartHomeService()
         self.session        = None
@@ -990,6 +996,8 @@ class BrahmaLive:
         self._speaking_lock = threading.Lock()
         self._use_openrouter_first = False
         self._pending_attention: dict | None = None
+        self._pending_reply_event: dict | None = None
+        self._reply_mode = False
         self._attention_lock = threading.Lock()
         self._attention_monitor = AttentionMonitor(on_event=self._on_external_notification)
         self._meeting_lock = threading.Lock()
@@ -1000,7 +1008,7 @@ class BrahmaLive:
             on_state=self._on_meeting_state,
         )
         self._phone_active = False
-        self._dashboard = dashboard if dashboard is not None else (DashboardServer() if DashboardServer is not None else None)
+        self._dashboard = dashboard if dashboard is not None else (DashboardServer() if (enable_dashboard and DashboardServer is not None) else None)
         self._dashboard_started = bool(dashboard_started and self._dashboard is not None)
         self.ui.on_text_command = self._on_text_command
         self.ui.on_attention_action = self._on_attention_action
@@ -1064,6 +1072,68 @@ class BrahmaLive:
         text = (text or "").strip()
         if not text:
             return
+        try:
+            stop_native_speech()
+        except Exception:
+            pass
+        # allow plugins to handle the incoming text command first
+        try:
+            pm = getattr(self, "plugin_manager", None)
+            if pm is not None:
+                handled = pm.dispatch("on_text_command", text, source)
+                if handled:
+                    return
+        except Exception:
+            pass
+        if self._reply_mode:
+            if self._handle_pending_reply(text):
+                return
+            # Still in reply mode but no pending reply event means reset and continue
+            self._reply_mode = False
+
+        try:
+            from smart_home.smart_device_manager import SmartDeviceManager
+            sd_mgr = SmartDeviceManager()
+            devices = self._smart_home.list_devices()
+            routed_text_home = sd_mgr.route_command(text, devices)
+            if routed_text_home != text:
+                print(f"[BRAHMA] Redirection: '{text}' -> '{routed_text_home}'")
+                text = routed_text_home
+        except Exception as e:
+            print(f"[BRAHMA] Redirection error: {e}")
+
+        developer_settings = self.ui._load_app_settings() if hasattr(self.ui, "_load_app_settings") else {}
+        developer_enabled = bool(developer_settings.get("developer_mode_enabled", False))
+        developer_workspace = str(developer_settings.get("developer_mode_workspace", "")).strip()
+        website_request = _looks_like_website_request(text)
+        if website_request and not (developer_enabled and developer_workspace):
+            message = "Website builds need developer mode enabled and a workspace folder selected first."
+            self.ui.write_log(f"ERR: {message}")
+            self.speak(message)
+            return
+
+        if website_request and developer_enabled and developer_workspace:
+            try:
+                if hasattr(self.ui, "_developer_status_lbl"):
+                    self.ui._developer_status_lbl.setText("Building website with Gemini in the selected workspace")
+                    self.ui._developer_card.show()
+                    self.ui._developer_card.raise_()
+                result = website_builder(
+                    parameters={
+                        "action": "create",
+                        "description": text,
+                        "title": text,
+                        "output_dir": developer_workspace,
+                        "auto_open": True,
+                    },
+                    player=self.ui,
+                )
+                self.ui.write_log(f"[WebsiteBuilder] {result[:400]}")
+                self.speak(result[:800])
+                return
+            except Exception as exc:
+                self.ui.write_log(f"ERR: Website build failed: {exc}")
+
         memory_ctx = _memory_context_for_request(text)
         routed_text = f"{memory_ctx}\n\nCurrent User Request:\n{text}" if memory_ctx else text
         if text.lower() in {"stop meeting mode", "end meeting mode", "close meeting mode"}:
@@ -1107,6 +1177,7 @@ class BrahmaLive:
             ),
             self._loop
         )
+
 
     def _handle_smart_home_command(self, text: str, source: str = "local") -> bool:
         normalized = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s%]", " ", text.lower())).strip()
@@ -1164,7 +1235,11 @@ class BrahmaLive:
         kind = (event.get("kind") or "message").strip().lower()
         if kind == "call":
             return f"Incoming call detected on {app}. Should I pick it up, ignore it, or cut the call?"
-        return f"You received a message on {app}. Do you want me to hear it?"
+        title = (event.get("title") or "").strip()
+        preview = (event.get("preview") or "").strip()
+        if title:
+            return f"You received a message on {app} from {title}. It says: {preview}"
+        return f"You received a message on {app}. It says: {preview}"
 
     def _announce_attention(self, event: dict):
         msg = self._attention_message(event)
@@ -1250,6 +1325,126 @@ class BrahmaLive:
         t = (text or "").lower()
         return any(word in t for word in words)
 
+    def _prompt_message_reply(self, event: dict) -> bool:
+        if not isinstance(event, dict):
+            return False
+        with self._attention_lock:
+            self._pending_reply_event = dict(event)
+            self._pending_attention = None
+            self._reply_mode = True
+
+        message = "What would you like to say in reply?"
+        self.ui.write_log(f"SYS: {message}")
+        threading.Thread(target=speak_native, args=(message,), daemon=True).start()
+        try:
+            self.ui.begin_task_workspace(
+                "Replying to message",
+                [
+                    "Type your response",
+                    "I will reword it naturally",
+                    f"Send via {event.get('app', 'the app')}",
+                ],
+                source="reply",
+            )
+            self.ui.update_task_workspace(
+                status="Awaiting your reply",
+                output="Type the message you want to send, and I will make it sound natural before sending it as you.",
+                percent=10,
+            )
+        except Exception:
+            pass
+        return True
+
+    def _handle_pending_reply(self, text: str) -> bool:
+        with self._attention_lock:
+            event = dict(self._pending_reply_event or {})
+            self._pending_reply_event = None
+        if not event:
+            return False
+
+        lower = (text or "").lower()
+        if self._attention_matches(lower, ("cancel", "never mind", "skip", "do not send", "don't send")):
+            self._reply_mode = False
+            self.ui.write_log("SYS: Reply cancelled.")
+            try:
+                self.ui.finish_task_workspace("Reply cancelled.", "Cancelled", 100)
+            except Exception:
+                pass
+            return True
+
+        self.ui.write_log(f"SYS: Drafting reply to {event.get('title') or event.get('app')}.")
+        threading.Thread(target=self._draft_and_send_reply, args=(event, text), daemon=True).start()
+        return True
+
+    def _rewrite_reply_text(self, user_text: str, event: dict) -> str:
+        prompt = (
+            "You are a friendly assistant helping a user rewrite their draft reply for a chat message. "
+            "Keep the same meaning and intent, expand the wording slightly, and make it sound natural and human. "
+            "Do not mention the notification, app, or any internal system details. "
+            "Return only the rewritten reply text.\n\n"
+            "Notification context:\n"
+            f"App: {event.get('app', '')}\n"
+            f"Sender: {event.get('title', '')}\n"
+            f"Preview: {event.get('preview', '')}\n\n"
+            "User draft reply:\n"
+            f"{user_text}\n\n"
+            "Reply text:"
+        )
+        try:
+            return _gemini_text_reply(prompt) or user_text
+        except Exception:
+            try:
+                return openrouter_client.chat(
+                    prompt,
+                    system="You are a friendly assistant. Rewrite the reply naturally and humanely.",
+                )
+            except Exception:
+                return user_text
+
+    def _draft_and_send_reply(self, event: dict, text: str):
+        try:
+            reply_text = self._rewrite_reply_text(text, event)
+            if not reply_text:
+                reply_text = text
+            self.ui.update_task_workspace(
+                status="Sending reply",
+                output="Sending your expanded reply now...",
+                percent=70,
+            )
+            receiver = (event.get("title") or "").strip()
+            platform = (event.get("app") or "whatsapp").strip()
+            if not receiver:
+                self.ui.write_log("ERR: Could not determine recipient for reply.")
+                try:
+                    self.ui.finish_task_workspace("Reply failed: recipient not found.", "Reply failed", 100)
+                except Exception:
+                    pass
+                return
+            result = send_message(
+                parameters={
+                    "receiver": receiver,
+                    "message_text": reply_text,
+                    "platform": platform,
+                },
+                player=self.ui,
+            )
+            self._reply_mode = False
+            self.ui.write_log(f"SYS: {result}")
+            try:
+                self.ui.finish_task_workspace(reply_text, "Reply delivered.", 100)
+            except Exception:
+                pass
+        except Exception as e:
+            self._reply_mode = False
+            self.ui.write_log(f"ERR: Reply failed: {e}")
+            try:
+                self.ui.finish_task_workspace(f"Reply failed: {e}", "Reply failed", 100)
+            except Exception:
+                pass
+        finally:
+            if not self.ui.muted:
+                self.ui.set_state("LISTENING")
+
     def _handle_attention_response(self, text: str) -> bool:
         with self._attention_lock:
             event = dict(self._pending_attention or {})
@@ -1260,6 +1455,8 @@ class BrahmaLive:
         lower = (text or "").lower()
 
         if kind == "message":
+            if self._attention_matches(lower, ("reply", "respond", "answer", "write back", "send reply", "send a reply")):
+                return self._prompt_message_reply(event)
             if self._attention_matches(lower, ("hear", "read", "what is it", "tell me", "show it", "open it")):
                 preview = read_event_preview(event)
                 self.ui.write_log(f"Brahma AI: {preview}")
@@ -1314,6 +1511,9 @@ class BrahmaLive:
                 preview = read_event_preview(event)
                 self.ui.write_log(f"Brahma AI: {preview}")
                 threading.Thread(target=speak_native, args=(preview,), daemon=True).start()
+            elif decision == "reply":
+                self._prompt_message_reply(event)
+                return
             else:
                 self.ui.write_log("SYS: Message alert dismissed.")
             with self._attention_lock:
@@ -1563,13 +1763,6 @@ class BrahmaLive:
                 )
                 result = r or "PDF created."
 
-            elif name == "website_builder":
-                r = await loop.run_in_executor(
-                    None,
-                    lambda: website_builder(parameters=args, player=self.ui)
-                )
-                result = r or "Website created."
-
             elif name == "screen_process":
                 threading.Thread(
                     target=screen_process,
@@ -1590,14 +1783,6 @@ class BrahmaLive:
 
             elif name == "desktop_control":
                 r = await loop.run_in_executor(None, lambda: desktop_control(parameters=args, player=self.ui))
-                result = r or "Done."
-
-            elif name == "code_helper":
-                r = await loop.run_in_executor(None, lambda: code_helper(parameters=args, player=self.ui, speak=self.speak))
-                result = r or "Done."
-
-            elif name == "dev_agent":
-                r = await loop.run_in_executor(None, lambda: dev_agent(parameters=args, player=self.ui, speak=self.speak))
                 result = r or "Done."
 
             elif name == "agent_task":
@@ -1752,6 +1937,11 @@ class BrahmaLive:
                         if sc.input_transcription and sc.input_transcription.text:
                             txt = sc.input_transcription.text.strip()
                             if txt:
+                                try:
+                                    from actions.attention_monitor import stop_native_speech
+                                    stop_native_speech()
+                                except Exception:
+                                    pass
                                 in_buf.append(txt)
                                 if self.ui.muted and _wakeword_detected(txt):
                                     try:
@@ -1921,7 +2111,16 @@ def main():
     _startup_log("main entered")
     _ensure_desktop_shortcut()
     ui = BrahmaUI(str(BASE_DIR / "assets" / "Brahma_Lite_Logo.png"), show_immediately=True)
-    dashboard = DashboardServer() if DashboardServer is not None else None
+    dashboard = None
+    dashboard_enabled = DashboardServer is not None and not _is_port_in_use(8000)
+    if DashboardServer is not None and not dashboard_enabled:
+        _startup_log("dashboard disabled: port 8000 already in use")
+        try:
+            ui.write_log("SYS: Mobile Connect is already running in another Brahma instance.")
+        except Exception:
+            pass
+    if dashboard_enabled:
+        dashboard = DashboardServer()
 
     if dashboard is not None:
         def _start_dashboard_server():
@@ -1941,11 +2140,34 @@ def main():
     ui.show_main()
     _startup_log("ui shown")
 
+    # Initialize plugin manager and load any plugins from ./plugins
+    try:
+        plugin_manager = PluginManager(BASE_DIR)
+        plugin_manager.load_plugins()
+    except Exception:
+        plugin_manager = None
+
     def runner():
         _startup_log("runner waiting api key")
         ui.wait_for_api_key()
         _startup_log("runner api key ready")
-        brahma = BrahmaLive(ui, dashboard=dashboard, dashboard_started=dashboard is not None)
+        brahma = BrahmaLive(
+            ui,
+            dashboard=dashboard,
+            dashboard_started=dashboard is not None,
+            enable_dashboard=dashboard_enabled,
+        )
+        try:
+            if plugin_manager is not None:
+                brahma.plugin_manager = plugin_manager
+                plugin_manager.register_brahma(brahma)
+                # allow plugins to run a startup hook
+                try:
+                    plugin_manager.dispatch("on_startup", brahma)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         try:
             asyncio.run(brahma.run())
         except KeyboardInterrupt:
@@ -1954,14 +2176,25 @@ def main():
     def start_runner():
         threading.Thread(target=runner, daemon=True).start()
 
-    # For testing: always start the runner and play the boot sequence so the
-    # splash/boot UI can be observed even when not launched from Windows startup.
     start_runner()
     try:
-        ui.play_boot_sequence()
+        ui.play_boot_sequence(
+            finished_callback=lambda: threading.Thread(
+                target=_speak_daily_briefing,
+                args=(ui,),
+                daemon=True,
+                name="daily-briefing",
+            ).start()
+        )
     except Exception:
         ui.show_main()
         start_runner()
+        threading.Thread(
+            target=_speak_daily_briefing,
+            args=(ui,),
+            daemon=True,
+            name="daily-briefing",
+        ).start()
     ui.root.mainloop()
 
 

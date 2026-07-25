@@ -5,11 +5,11 @@
 <h1 align="center">Brahma AI - Lite</h1>
 
 <p align="center">
-  <strong>Premium Windows desktop AI assistant</strong> for voice, automation, productivity, and intelligent workflows.
+  <strong>Open-source Windows desktop AI assistant</strong> for voice, automation, productivity, and intelligent workflows.
 </p>
 
 <p align="center">
-  <a href="#overview"><img src="https://img.shields.io/badge/experience-premium-blue?style=for-the-badge" alt="Premium Experience" /></a>
+  <a href="#overview"><img src="https://img.shields.io/badge/experience-open%20source-blue?style=for-the-badge" alt="Open Source Experience" /></a>
   <a href="#getting-started"><img src="https://img.shields.io/badge/platform-Windows%2010%2F11-lightgrey?style=for-the-badge" alt="Windows" /></a>
   <a href="#how-it-works"><img src="https://img.shields.io/badge/ai-voice%20%2B%20automation-green?style=for-the-badge" alt="AI + Automation" /></a>
 </p>
@@ -18,16 +18,16 @@
 
 ## Overview
 
-Brahma AI - Lite is a premium desktop assistant designed for Windows power users. It unites voice and text input with intelligent automation, productivity workflows, document generation, and adaptive screen-aware actions.
+Brahma AI - Lite is an open-source desktop assistant designed for Windows power users. It unites voice and text input with intelligent automation, productivity workflows, document generation, and adaptive screen-aware actions.
 
 - Live voice and text interaction via Gemini with OpenRouter fallback
 - Automatic daily briefing with interruption-aware audio playback
 - Desktop automation for apps, windows, files, and browser workflows
 - Office content generation for PowerPoint, Word, spreadsheets, and PDF
-- Built-in website creation support through Buildonaut studio
+- Built-in website and workspace creation through Brahma's local workspace generator
 - Discord collaboration, reminders, meeting assistant, and notifications
 
-## Why It’s Premium
+## Why It Stands Out
 
 - Responsive UI with rich task/workspace feedback
 - Seamless AI and voice integration for desktop productivity
@@ -40,7 +40,7 @@ Brahma AI - Lite is a premium desktop assistant designed for Windows power users
 ### Intelligent Assistant
 
 - Unified voice + typed conversation experience
-- Startup daily briefing with premium Edge TTS delivery
+- Startup daily briefing with Edge TTS delivery
 - Instant briefing interruption when a new message arrives
 - Gemini-first live AI with OpenRouter fallback support
 
@@ -152,6 +152,18 @@ start_brahma.vbs
 - `config/app_settings.json` — voice, UI, startup, and automation settings
 - `config/discord_bot.json` — Discord bridge settings
 
+## Plugin System
+
+You can extend Brahma AI with lightweight Python plugins placed in the `plugins/` folder. Plugins are simple `*.py` files that export one or more hook functions:
+
+- `on_brahma_created(brahma)` — called when the `BrahmaLive` instance is created
+- `on_startup(brahma)` — called once during app startup after plugins are registered
+- `on_text_command(text, source, brahma=None)` — called for each incoming text command; return `True` to mark the command handled and stop further processing
+
+Example: `plugins/example_plugin.py` demonstrates the hooks.
+
+To enable plugins, simply drop your plugin file into the `plugins/` folder and restart the app. The launcher and `main.py` load plugins automatically.
+
 ## Project Structure
 
 - `main.py` — core runtime, AI session orchestration, and startup flow
@@ -165,17 +177,16 @@ start_brahma.vbs
 ### 2026-07-19
 
 - Restored automatic daily briefing playback at startup.
-- Unified local TTS output to the same premium male Edge voice.
+- Unified local TTS output to the same Edge voice.
 - Added briefing interruption support for immediate user response.
-- Redesigned gesture HUD for premium hand landmark control.
+- Redesigned gesture HUD for hand landmark control.
 - Improved cursor mapping for better desktop reach and direction.
 - Added idle speech prompts for proactive engagement.
-- Enhanced controller tests for Buildonaut workflow coverage.
+- Tightened the developer workflow so Brahma uses the local workspace generator for websites and keeps coding tasks in the main app flow.
 
 ## Community
 
 - Discord: https://discord.gg/gEYmJKKtq3
-- YouTube: https://www.youtube.com/@Buildonaut-AI
 
 ## License
 
@@ -186,4 +197,3 @@ This project is licensed under a custom source-available license. See `LICENSE` 
 - Suryaansh Tiwari
 
 Please preserve attribution and keep credentials secure when building on top of Brahma AI - Lite.
-

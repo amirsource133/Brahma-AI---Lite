@@ -429,6 +429,23 @@ Fixed code for {fix_path}:"""
 
     return updated_codes
 
+def _resolve_workspace_directory(
+    workspace_path: str | None,
+    project_name: str,
+) -> Path:
+    raw = (workspace_path or "").strip()
+    if raw:
+        path = Path(raw).expanduser()
+        if path.is_file():
+            path = path.parent
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    project_dir = PROJECTS_DIR / (project_name or "brahma_project")
+    project_dir.mkdir(parents=True, exist_ok=True)
+    return project_dir
+
+
 def _build_project(
     description: str,
     language: str,
@@ -436,6 +453,7 @@ def _build_project(
     timeout: int,
     speak=None,
     player=None,
+    workspace_path: str | None = None,
 ) -> str:
 
     def log(msg: str):
@@ -444,6 +462,8 @@ def _build_project(
             player.write_log(f"[DevAgent] {msg}")
 
     log("Planning project structure...")
+    if workspace_path:
+        log(f"Developer workspace override: {project_dir}")
     try:
         plan = _plan_project(description, language)
     except RateLimitError:
@@ -457,8 +477,7 @@ def _build_project(
 
     proj_name    = project_name or plan.get("project_name", "brahma_project")
     proj_name    = re.sub(r"[^\w\-]", "_", proj_name)
-    project_dir  = PROJECTS_DIR / proj_name
-    project_dir.mkdir(parents=True, exist_ok=True)
+    project_dir  = _resolve_workspace_directory(workspace_path=workspace_path, project_name=proj_name)
 
     files        = plan.get("files", [])
     entry_point  = plan.get("entry_point", "main.py")
@@ -583,6 +602,7 @@ def dev_agent(
     language     = p.get("language", "python").strip()
     project_name = p.get("project_name", "").strip()
     timeout      = int(p.get("timeout", 30))
+    workspace_path = p.get("workspace_path") or p.get("project_dir") or ""
 
     if not description:
         return "Please describe the project you want me to build, sir."
@@ -594,4 +614,5 @@ def dev_agent(
         timeout      = timeout,
         speak        = speak,
         player       = player,
+        workspace_path = workspace_path,
     )

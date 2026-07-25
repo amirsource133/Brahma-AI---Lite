@@ -107,28 +107,10 @@ flight_finder
   destination: string (required)
   date: string (required)
 
-code_helper
-  action: "write" | "edit" | "run" | "explain" (required)
+claude_code
   description: string (required)
-  language: string (optional)
-  output_path: string (optional)
-  file_path: string (optional)
-
-website_builder
-  action: "create" | "open" | "launch" (required)
-  site_name: string (optional)
-  title: string (optional)
-  brief: string (optional)
-  description: string (optional)
-  style: string (optional)
-  audience: string (optional)
-  tone: string (optional)
-  output_dir: string (optional)
-  Use for any request to build a website, landing page, portfolio, or product site.
-
-dev_agent
-  description: string (required)
-  language: string (optional)
+  workspace_path: string (optional)
+  Use for all coding, website, project, file-editing, and developer requests.
 EXAMPLES:
 
 Goal: "research mechanical engineering and save it to a notepad file"
@@ -173,12 +155,12 @@ reminder | date: [today], time: [now+30min], message: "Reminder"
 Goal: "Build a premium website for my AI assistant"
 Steps:
 
-website_builder | action: create, site_name: "Brahma AI", brief: "A premium, futuristic desktop AI assistant website with strong hero, product features, social proof, FAQ, and CTA sections.", style: "modern premium"
+claude_code | description: "Create a premium, futuristic desktop AI assistant website with strong hero, product features, social proof, FAQ, and CTA sections."
 
 Goal: "Create a SaaS AI studio like Google AI Studio"
 Steps:
 
-website_builder | action: create, site_name: "TradeForge Studio", brief: "A full-stack SaaS AI studio with a sidebar, workspace, prompt playground, API area, billing, and settings panels.", style: "ai studio"
+claude_code | description: "Create a full-stack SaaS AI studio with a sidebar, workspace, prompt playground, API area, billing, and settings panels."
 
 OUTPUT — return ONLY valid JSON, no markdown, no explanation, no code blocks:
 {
@@ -225,13 +207,10 @@ def _rewrite_generated_step(step: dict, goal: str) -> None:
         return
     desc = step.get("description", goal) or goal
     if _looks_like_website_goal(goal):
-        print(f"[Planner] ⚠️ generated_code detected in step {step.get('step')} — replacing with website_builder")
-        step["tool"] = "website_builder"
+        print(f"[Planner] ⚠️ generated_code detected in step {step.get('step')} — replacing with claude_code")
+        step["tool"] = "claude_code"
         step["parameters"] = {
-            "action": "create",
-            "site_name": goal[:40] or "Brahma Website",
-            "brief": desc[:1200],
-            "style": "modern premium",
+          "description": desc[:1200],
         }
         return
     print(f"[Planner] ⚠️ generated_code detected in step {step.get('step')} — replacing with web_search")
@@ -283,21 +262,16 @@ def _fallback_plan(goal: str) -> dict:
     print("[Planner] 🔄 Fallback plan")
     if _looks_like_website_goal(goal):
         return {
-            "goal": goal,
-            "steps": [
-                {
-                    "step": 1,
-                    "tool": "website_builder",
-                    "description": f"Create a polished website for: {goal}",
-                    "parameters": {
-                        "action": "create",
-                        "site_name": goal[:40] or "Brahma Website",
-                        "brief": goal,
-                        "style": "modern premium",
-                    },
-                    "critical": True
-                }
-            ]
+          "goal": goal,
+          "steps": [
+            {
+              "step": 1,
+              "tool": "claude_code",
+              "description": f"Create the requested website with Claude Code: {goal}",
+              "parameters": {"description": goal},
+              "critical": True,
+            }
+          ],
         }
     return {
         "goal": goal,

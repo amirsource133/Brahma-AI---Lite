@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import html as html_lib
@@ -19,7 +19,7 @@ if platform.system() == "Windows":
 
 from PyQt6.QtCore import (
     QEasingCurve, QEvent, QMimeData, QObject, QPoint, QPointF, QRectF, QSize, Qt,
-    QTimer, QUrl, QPropertyAnimation, pyqtProperty, pyqtSignal,
+    QTimer, QUrl, QPropertyAnimation, QParallelAnimationGroup, pyqtProperty, pyqtSignal,
 )
 from PyQt6.QtGui import (
     QAction, QBrush, QColor, QDragEnterEvent, QDropEvent, QFont, QFontDatabase,
@@ -27,16 +27,17 @@ from PyQt6.QtGui import (
     QRadialGradient, QShortcut, QTextOption,
 )
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsOpacityEffect, QGridLayout, QHBoxLayout,
-    QLabel, QLineEdit, QMenu, QMainWindow, QPushButton, QScrollArea, QSizePolicy, QTextBrowser, QTextEdit,
+    QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsOpacityEffect, QGridLayout, QHBoxLayout,
+    QLabel, QLineEdit, QMenu, QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSlider, QTextBrowser, QTextEdit,
     QGraphicsDropShadowEffect,
     QStyle, QSystemTrayIcon, QVBoxLayout, QWidget, QProgressBar,
-    QStackedWidget, QInputDialog,
+    QStackedWidget, QInputDialog, QMessageBox,
 )
 
 from discord_bot import DiscordBotService
 from gesture_utils import estimate_gesture_state
-from smart_home_page_new import BrahmaHomePage
+from smart_home import SmartHomeService
+from smart_home_page_new import BrahmaHomePage, _DeviceTile
 from workspace_store import store as workspace_store
 
 def _base_dir() -> Path:
@@ -483,6 +484,8 @@ def _default_app_settings() -> dict:
         "auto_provider_switch": True,
         "attention_message_prompts": True,
         "attention_call_prompts": True,
+        "developer_mode_enabled": False,
+        "developer_mode_workspace": "",
     }
 
 
@@ -2663,14 +2666,21 @@ class WorkspaceSidebar(QWidget):
             QFrame#WorkspaceSidebarPanel {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                     stop:0 rgba(16, 18, 24, 230),
-                    stop:0.55 rgba(10, 12, 18, 210),
-                    stop:1 rgba(5, 7, 11, 200));
+                stop:0.55 rgba(10, 12, 18, 210),
+                stop:1 rgba(5, 7, 11, 200));
                 border: 1px solid rgba(255, 255, 255, 0.14);
                 border-radius: 22px;
-                box-shadow: 0 12px 35px rgba(0,0,0,0.28);
             }
             """
         )
+        try:
+            shadow = QGraphicsDropShadowEffect(self._panel)
+            shadow.setBlurRadius(35)
+            shadow.setColor(QColor(0, 0, 0, 72))
+            shadow.setOffset(0, 12)
+            self._panel.setGraphicsEffect(shadow)
+        except Exception:
+            pass
         root = QHBoxLayout(self._panel)
         root.setContentsMargins(14, 14, 12, 14)
         root.setSpacing(10)
@@ -3518,7 +3528,9 @@ class LauncherControlPanel(QDialog):
     def __init__(self, *, startup_workspace: bool = False, on_open=None, on_close=None,
                  on_toggle_startup=None, on_hide_icon=None, on_restart=None, on_quit=None,
                  on_open_app=None,
-                 on_show_icon=None, parent=None):
+                 on_show_icon=None,
+                 on_open_dev=None,
+                 parent=None):
         super().__init__(parent)
         self._on_open = on_open
         self._on_close = on_close
@@ -3528,6 +3540,7 @@ class LauncherControlPanel(QDialog):
         self._on_quit = on_quit
         self._on_open_app = on_open_app
         self._on_show_icon = on_show_icon
+        self._on_open_dev = on_open_dev
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -3600,6 +3613,7 @@ class LauncherControlPanel(QDialog):
         self._restart_btn = mk_btn("Restart Brahma")
         self._quit_btn = mk_btn("Quit Brahma")
         self._open_app_btn = mk_btn("Open App")
+        self._open_dev_btn = mk_btn("Open Developer Mode")
 
         self._open_btn.clicked.connect(lambda: self._invoke(self._on_open))
         self._close_btn.clicked.connect(lambda: self._invoke(self._on_close))
@@ -3609,10 +3623,12 @@ class LauncherControlPanel(QDialog):
         self._restart_btn.clicked.connect(lambda: self._invoke(self._on_restart))
         self._quit_btn.clicked.connect(lambda: self._invoke(self._on_quit))
         self._open_app_btn.clicked.connect(lambda: self._invoke(self._on_open_app))
+        self._open_dev_btn.clicked.connect(lambda: self._invoke(self._on_open_dev))
 
         for btn in (
             self._open_app_btn, self._open_btn, self._close_btn, self._startup_btn,
-            self._show_icon_btn, self._hide_icon_btn, self._restart_btn, self._quit_btn
+            self._show_icon_btn, self._hide_icon_btn, self._open_dev_btn,
+            self._restart_btn, self._quit_btn
         ):
             lay.addWidget(btn)
 
@@ -4147,7 +4163,7 @@ class SetupOverlay(QWidget):
         self._sel(os_default)
         layout.addSpacing(12)
 
-        self._status = QLabel("Enter your Gemini key to continue. OpenRouter is optional.")
+        self._status = QLabel("Enter your Gemini key to continue. OpenRouter remains optional; the assistant uses the shared app configuration.")
         self._status.setWordWrap(True)
         self._status.setFont(QFont("Courier New", 8))
         self._status.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -4214,6 +4230,7 @@ class CommandBar(QWidget):
     submitted = pyqtSignal(str)
     attach_clicked = pyqtSignal()
     mic_clicked = pyqtSignal()
+    developer_clicked = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -4308,6 +4325,26 @@ class CommandBar(QWidget):
         mic.clicked.connect(self.mic_clicked.emit)
         lay.addWidget(mic)
 
+        dev = QPushButton("DEV")
+        dev.setFixedSize(60, 40)
+        dev.setCursor(Qt.CursorShape.PointingHandCursor)
+        dev.setToolTip("Developer mode")
+        dev.setStyleSheet(f"""
+            QPushButton {{
+                background: rgba(18,18,18,240);
+                color: {C.WHITE};
+                border: 1px solid rgba(255,69,69,140);
+                border-radius: 12px;
+                font: 700 9px 'Segoe UI';
+            }}
+            QPushButton:hover {{
+                background: rgba(34,18,18,245);
+                border: 1px solid {C.PRI};
+            }}
+        """)
+        dev.clicked.connect(self.developer_clicked.emit)
+        lay.addWidget(dev)
+
         send = QPushButton()
         send.setFixedSize(40, 40)
         send.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -4363,6 +4400,92 @@ class CommandBar(QWidget):
             self.hide()
             return
         super().keyPressEvent(event)
+
+
+class DeveloperModeDialog(QDialog):
+    def __init__(self, parent=None, settings: dict | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Developer Mode")
+        self.setMinimumWidth(420)
+        self.setStyleSheet(f"""
+            QDialog {{ background: rgba(8,10,14,235); color: {C.WHITE}; border: 1px solid {C.BORDER_B}; }}
+            QLabel {{ color: {C.TEXT}; }}
+            QLineEdit {{
+                background: rgba(16,16,16,240);
+                color: {C.WHITE};
+                border: 1px solid {C.BORDER};
+                border-radius: 10px;
+                padding: 8px 10px;
+            }}
+            QLineEdit:focus {{ border: 1px solid {C.PRI}; }}
+            QPushButton {{
+                background: rgba(18,18,18,240);
+                color: {C.WHITE};
+                border: 1px solid {C.BORDER_B};
+                border-radius: 10px;
+                padding: 8px 12px;
+            }}
+            QPushButton:hover {{ background: rgba(28,28,28,245); border: 1px solid {C.PRI}; }}
+            QCheckBox {{ color: {C.TEXT}; }}
+        """)
+
+        self._settings = dict(settings or {})
+        self._enabled = bool(self._settings.get("developer_mode_enabled", False))
+        fallback_workspace = str(Path(__file__).resolve().parent)
+        self._workspace = str(self._settings.get("developer_mode_workspace", "") or fallback_workspace)
+
+        root = QVBoxLayout(self)
+        root.setSpacing(12)
+        root.setContentsMargins(16, 16, 16, 16)
+
+        title = QLabel("Developer Co-pilot")
+        title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {C.PRI};")
+        root.addWidget(title)
+
+        desc = QLabel("Pick a workspace folder Brahma should use when building websites or other workspace-based tasks.")
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color: {C.TEXT_DIM};")
+        root.addWidget(desc)
+
+        folder_row = QHBoxLayout()
+        folder_row.setSpacing(8)
+        self._workspace_edit = QLineEdit(self._workspace)
+        self._workspace_edit.setPlaceholderText("Select a folder...")
+        self._workspace_edit.setReadOnly(True)
+        folder_row.addWidget(self._workspace_edit, stretch=1)
+
+        browse = QPushButton("Browse")
+        browse.clicked.connect(self._browse_folder)
+        folder_row.addWidget(browse)
+        root.addLayout(folder_row)
+
+        self._enabled_box = QCheckBox("Turn developer mode on")
+        self._enabled_box.setChecked(self._enabled)
+        root.addWidget(self._enabled_box)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        save = QPushButton("Save")
+        save.clicked.connect(self._save_and_close)
+        btn_row.addWidget(cancel)
+        btn_row.addWidget(save)
+        root.addLayout(btn_row)
+
+    def _browse_folder(self):
+        path = QFileDialog.getExistingDirectory(self, "Select developer workspace", self._workspace or str(BASE_DIR))
+        if path:
+            self._workspace_edit.setText(path)
+
+    def _save_and_close(self):
+        self._settings["developer_mode_enabled"] = bool(self._enabled_box.isChecked())
+        self._settings["developer_mode_workspace"] = self._workspace_edit.text().strip()
+        self.accept()
+
+    def get_settings(self) -> dict:
+        return dict(self._settings)
 
 
 class ScanningOverlay(QWidget):
@@ -5064,12 +5187,15 @@ class IncomingAlertDialog(QDialog):
                 btn_row.addWidget(btn)
         else:
             self._hear_btn = _btn("Hear it", primary=True)
+            self._reply_btn = _btn("Reply")
             self._ignore_btn = _btn("Ignore")
             self._x_btn = _btn("X")
             self._hear_btn.clicked.connect(lambda: self._choose("hear"))
+            self._reply_btn.clicked.connect(lambda: self._choose("reply"))
             self._ignore_btn.clicked.connect(lambda: self._choose("ignore"))
             self._x_btn.clicked.connect(lambda: self._choose("noop"))
             btn_row.addWidget(self._hear_btn)
+            btn_row.addWidget(self._reply_btn)
             btn_row.addWidget(self._ignore_btn)
             btn_row.addWidget(self._x_btn)
 
@@ -5459,6 +5585,8 @@ class MainWindow(QMainWindow):
     _log_sig   = pyqtSignal(str)
     _state_sig = pyqtSignal(str)
     _scan_sig  = pyqtSignal(bool, str)
+    _briefing_sig = pyqtSignal(object)
+    _briefing_hide_sig = pyqtSignal()
     _attention_sig = pyqtSignal(object)
     _meeting_sig = pyqtSignal(object)
     _task_workspace_sig = pyqtSignal(object)
@@ -5541,6 +5669,8 @@ class MainWindow(QMainWindow):
 
         self._log_sig.connect(self._on_log_text)
         self._state_sig.connect(self._apply_state)
+        self._briefing_sig.connect(self._apply_daily_briefing)
+        self._briefing_hide_sig.connect(self._schedule_daily_briefing_hide)
         self._attention_sig.connect(self._show_attention_alert)
         self._meeting_sig.connect(self._apply_meeting_state)
         self._task_workspace_sig.connect(self._apply_task_workspace)
@@ -5550,6 +5680,9 @@ class MainWindow(QMainWindow):
         self._card_hide_tmr = QTimer(self)
         self._card_hide_tmr.setSingleShot(True)
         self._card_hide_tmr.timeout.connect(self._hide_command_cards)
+        self._briefing_hide_tmr = QTimer(self)
+        self._briefing_hide_tmr.setSingleShot(True)
+        self._briefing_hide_tmr.timeout.connect(self._hide_daily_briefing_card)
 
         self._ready = self._check_config()
         self._api_ready = self._ready
@@ -5750,17 +5883,20 @@ class MainWindow(QMainWindow):
             return {
                 "gemini_api_key": "",
                 "openrouter_api_key": "",
+                "anthropic_api_key": "",
                 "os_system": platform.system(),
             }
         try:
             data = json.loads(API_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
+                data.setdefault("anthropic_api_key", "")
                 return data
         except Exception:
             pass
         return {
             "gemini_api_key": "",
             "openrouter_api_key": "",
+            "anthropic_api_key": "",
             "os_system": platform.system(),
         }
 
@@ -5865,6 +6001,16 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_center_stack") and isinstance(self._center_stack, QStackedWidget):
             index = {"dashboard": 0, "home": 1, "settings": 2}.get(page, 0)
             self._center_stack.setCurrentIndex(index)
+        if page == "home" and hasattr(self, "_home_page"):
+            try:
+                self._home_page.refresh()
+            except Exception:
+                pass
+        if page == "dashboard" and hasattr(self, "_smart_devices_section"):
+            try:
+                self._smart_devices_section.refresh(force=True)
+            except Exception:
+                pass
         if hasattr(self, "_right_panel"):
             self._right_panel.setVisible(page == "dashboard")
         if hasattr(self, "_right_stack") and isinstance(self._right_stack, QStackedWidget):
@@ -6390,6 +6536,47 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_result_card"):
             self._result_card.hide()
 
+    def _apply_daily_briefing(self, payload):
+        action, text = payload if isinstance(payload, tuple) else ("hide", "")
+        if action == "show" and hasattr(self, "_briefing_card"):
+            clean_text = " ".join(str(text or "").split())
+            self._briefing_text_lbl.setText(clean_text[:360] + ("..." if len(clean_text) > 360 else ""))
+            self._briefing_card.show()
+            self._briefing_card.raise_()
+            if hasattr(self, "_smart_devices_section"):
+                self._smart_devices_section.hide()
+        elif hasattr(self, "_briefing_card"):
+            self._briefing_card.hide()
+            if hasattr(self, "_smart_devices_section"):
+                self._smart_devices_section.show()
+                try:
+                    self._smart_devices_section.refresh(force=True)
+                except Exception:
+                    pass
+
+    def _hide_daily_briefing_card(self):
+        if hasattr(self, "_briefing_card"):
+            self._briefing_card.hide()
+        if hasattr(self, "_smart_devices_section"):
+            self._smart_devices_section.show()
+            try:
+                self._smart_devices_section.refresh(force=True)
+            except Exception:
+                pass
+
+    def _schedule_daily_briefing_hide(self):
+        if hasattr(self, "_briefing_hide_tmr"):
+            self._briefing_hide_tmr.start(10000)
+
+    def show_daily_briefing(self, text: str):
+        self._briefing_sig.emit(("show", text or ""))
+
+    def hide_daily_briefing(self):
+        self._briefing_sig.emit(("hide", ""))
+
+    def schedule_daily_briefing_hide(self):
+        self._briefing_hide_sig.emit()
+
     def show_app(self):
         self.showNormal()
         self.raise_()
@@ -6626,25 +6813,20 @@ class MainWindow(QMainWindow):
                 pass
             self._incoming_alert = None
 
-        dlg = IncomingAlertDialog(data, self)
+        dlg = IncomingAlertDialog(data, None)
         dlg.decision.connect(lambda decision, ev=data: self._attention_choice(ev, decision))
 
         if (data.get("kind") or "").strip().lower() == "call":
             self.show_app()
 
-        geo = self.frameGeometry()
-        if geo.width() <= 0 or geo.height() <= 0:
-            screen = QApplication.primaryScreen().availableGeometry()
-            cx = screen.center().x()
-            cy = screen.center().y()
-        else:
-            cx = geo.center().x()
-            cy = geo.center().y()
+        screen = QApplication.primaryScreen().availableGeometry()
+        margin = 16
         dlg.adjustSize()
-        dlg.move(cx - dlg.width() // 2, cy - dlg.height() // 2)
+        x = screen.right() - dlg.width() - margin
+        y = screen.top() + margin
+        dlg.move(x, y)
         dlg.show()
         dlg.raise_()
-        dlg.activateWindow()
         self._incoming_alert = dlg
 
     def _attention_choice(self, event: dict, decision: str):
@@ -6678,10 +6860,12 @@ class MainWindow(QMainWindow):
     def _on_setup_done(self, key: str, or_key: str, os_name: str):
         try:
             os.makedirs(CONFIG_DIR, exist_ok=True)
+            existing = self._load_api_defaults()
             API_FILE.write_text(
                 json.dumps({
                     "gemini_api_key":    key,
                     "openrouter_api_key": or_key,
+                    "anthropic_api_key": existing.get("anthropic_api_key", ""),
                     "os_system":         os_name,
                 }, indent=4),
                 encoding="utf-8",
@@ -6699,9 +6883,16 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
 
     def _build_left_panel_modern(self) -> QWidget:
-        w = QWidget()
+        w = QFrame()
+        w.setObjectName("LeftPanelFrame")
         w.setFixedWidth(_LEFT_W)
-        w.setStyleSheet("QWidget { background: transparent; border-right: none; }")
+        w.setStyleSheet(f"""
+            QFrame#LeftPanelFrame {{
+                background: rgba(8, 9, 13, 0.88);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 18px;
+            }}
+        """)
         root_lay = QVBoxLayout(w)
         root_lay.setContentsMargins(14, 14, 14, 14)
         root_lay.setSpacing(12)
@@ -6844,7 +7035,7 @@ class MainWindow(QMainWindow):
         brand_text.setSpacing(2)
         title = QLabel("<span style='color:#ff4545;'>BRAHMA</span><br><span style='color:#ffffff;'>LITE</span>")
         title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
-        title.setStyleSheet("background: transparent; line-height: 110%;")
+        title.setStyleSheet("background: transparent;")
         sub = QLabel("Your AI Assistant")
         sub.setFont(QFont("Segoe UI", 9))
         sub.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent; padding-top: 2px;")
@@ -7013,6 +7204,65 @@ class MainWindow(QMainWindow):
         command_row.addWidget(hud_wrap, stretch=1)
         command_row.addWidget(self._result_card, alignment=Qt.AlignmentFlag.AlignVCenter)
         stage.addLayout(command_row, stretch=1)
+
+        self._smart_devices_section = SmartDevicesSection(self)
+        self._smart_devices_section.setMinimumHeight(0)
+        self._smart_devices_section.hide()
+        stage.addWidget(self._smart_devices_section)
+
+        self._briefing_card = QFrame()
+        self._briefing_card.setObjectName("DailyBriefingCard")
+        self._briefing_card.setFixedSize(540, 104)
+        self._briefing_card.setStyleSheet(f"""
+            QFrame#DailyBriefingCard {{
+                background: rgba(8, 10, 14, 242);
+                border: 1px solid rgba(255, 69, 69, 180);
+                border-radius: 14px;
+            }}
+        """)
+        briefing_lay = QVBoxLayout(self._briefing_card)
+        briefing_lay.setContentsMargins(16, 11, 16, 11)
+        briefing_lay.setSpacing(4)
+        briefing_title = QLabel("DAILY BRIEF")
+        briefing_title.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        briefing_title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        briefing_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._briefing_text_lbl = QLabel()
+        self._briefing_text_lbl.setWordWrap(True)
+        self._briefing_text_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._briefing_text_lbl.setFont(QFont("Segoe UI", 9))
+        self._briefing_text_lbl.setStyleSheet(f"color: {C.TEXT}; background: transparent;")
+        briefing_lay.addWidget(briefing_title)
+        briefing_lay.addWidget(self._briefing_text_lbl, stretch=1)
+        stage.addWidget(self._briefing_card, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self._briefing_card.hide()
+
+        self._developer_card = QFrame()
+        self._developer_card.setObjectName("DeveloperCard")
+        self._developer_card.setFixedSize(540, 78)
+        self._developer_card.setStyleSheet(f"""
+            QFrame#DeveloperCard {{
+                background: rgba(8, 10, 14, 242);
+                border: 1px solid rgba(255, 69, 69, 180);
+                border-radius: 14px;
+            }}
+        """)
+        dev_lay = QVBoxLayout(self._developer_card)
+        dev_lay.setContentsMargins(16, 10, 16, 10)
+        dev_lay.setSpacing(3)
+        dev_title = QLabel("DEVELOPER CO-PILOT")
+        dev_title.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        dev_title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        dev_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._developer_status_lbl = QLabel("Developer mode is idle")
+        self._developer_status_lbl.setWordWrap(True)
+        self._developer_status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._developer_status_lbl.setFont(QFont("Segoe UI", 9))
+        self._developer_status_lbl.setStyleSheet(f"color: {C.TEXT}; background: transparent;")
+        dev_lay.addWidget(dev_title)
+        dev_lay.addWidget(self._developer_status_lbl)
+        stage.addWidget(self._developer_card, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self._developer_card.hide()
 
         # Quick Actions and Suggested Actions removed per user request; keep small spacer
         spacer = QWidget()
@@ -7622,6 +7872,23 @@ class SystemConnectivityPage(QWidget):
         sl.addWidget(self._startup_updates_btn)
         lay.addWidget(startup)
 
+        # Shortcuts & Pinning
+        shortcuts = self._card("Shortcuts & Pinning", "Create shortcuts and pin Brahma to your Windows system.")
+        shl = shortcuts.layout()
+        
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(12)
+        
+        self._desktop_shortcut_btn = QPushButton("Create Desktop Shortcut")
+        self._desktop_shortcut_btn.clicked.connect(self._handle_create_desktop_shortcut)
+        self._taskbar_pin_btn = QPushButton("Pin to Taskbar")
+        self._taskbar_pin_btn.clicked.connect(self._handle_pin_to_taskbar)
+        
+        btn_row.addWidget(self._desktop_shortcut_btn, 1)
+        btn_row.addWidget(self._taskbar_pin_btn, 1)
+        shl.addLayout(btn_row)
+        lay.addWidget(shortcuts)
+
         # Startup animation
         anim = self._card("Startup Animation", "Control how the boot sequence behaves.")
         al = anim.layout()
@@ -8019,6 +8286,653 @@ class SystemConnectivityPage(QWidget):
         if self._ctrl() and hasattr(self._ctrl(), "_win"):
             self._sys_provider.setText("Gemini" if app.get("default_ai_provider", "Gemini") == "Gemini" else "OpenRouter")
 
+    def _handle_create_desktop_shortcut(self):
+        success, path_or_err = self._create_desktop_shortcut_logic()
+        if success:
+            QMessageBox.information(
+                self, 
+                "Success", 
+                f"Desktop shortcut created successfully at:\n{path_or_err}"
+            )
+        else:
+            QMessageBox.warning(
+                self, 
+                "Error", 
+                f"Failed to create desktop shortcut:\n{path_or_err}"
+            )
+
+    def _handle_pin_to_taskbar(self):
+        success, msg = self._pin_app_to_taskbar_logic()
+        if success:
+            QMessageBox.information(self, "Success", msg)
+        else:
+            QMessageBox.warning(
+                self, 
+                "Taskbar Pinning", 
+                msg
+            )
+
+    def _create_desktop_shortcut_logic(self):
+        try:
+            import os
+            import sys
+            import shutil
+            import subprocess
+            from pathlib import Path
+            import winreg
+            
+            # Find the correct Desktop folder path using registry (OneDrive safe!)
+            try:
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders")
+                desktop_raw, _ = winreg.QueryValueEx(key, "Desktop")
+                winreg.CloseKey(key)
+                desktop_dir = Path(os.path.expandvars(desktop_raw))
+            except Exception:
+                desktop_dir = Path(os.path.expanduser("~")) / "Desktop"
+                
+            desktop_dir.mkdir(parents=True, exist_ok=True)
+            shortcut_path = desktop_dir / "Brahma Ai - Premium.lnk"
+            
+            # Base variables
+            base_dir = Path(os.path.abspath("."))
+            script_path = base_dir / "main.py"
+            icon_path = base_dir / "assets" / "Brahma_Lite_Logo.ico"
+            
+            python_exe = sys.executable
+            if not python_exe:
+                python_exe = shutil.which("pythonw") or shutil.which("python") or "pythonw"
+                
+            shortcut_target = python_exe
+            shortcut_args = f'"{script_path}"'
+            if getattr(sys, "frozen", False):
+                shortcut_target = python_exe
+                shortcut_args = ""
+                
+            powershell_exe = shutil.which("powershell.exe") or "powershell"
+            
+            def _ps_escape(value: str) -> str:
+                return value.replace("'", "''")
+                
+            icon_value = str(icon_path) if icon_path.exists() else ""
+            ps1_script = "\n".join([
+                "$WshShell = New-Object -ComObject WScript.Shell",
+                f"$Shortcut = $WshShell.CreateShortcut('{_ps_escape(str(shortcut_path))}')",
+                f"$Shortcut.TargetPath = '{_ps_escape(shortcut_target)}'",
+                f"$Shortcut.Arguments = '{_ps_escape(shortcut_args)}'",
+                f"$Shortcut.WorkingDirectory = '{_ps_escape(str(base_dir))}'",
+                "$Shortcut.WindowStyle = 7",
+                "$Shortcut.Description = 'Launch Brahma Ai - Premium'",
+                f"if ('{_ps_escape(icon_value)}') {{ $Shortcut.IconLocation = '{_ps_escape(icon_value)},0' }}",
+                "$Shortcut.Save()",
+            ])
+            
+            ps1_path = base_dir / "config" / "create_desktop_shortcut.ps1"
+            ps1_path.write_text(ps1_script, encoding="utf-8")
+            
+            subprocess.run(
+                [powershell_exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            
+            # Write marker file
+            marker_path = base_dir / "config" / ".desktop_shortcut_created"
+            marker_path.write_text("created", encoding="utf-8")
+            
+            return True, str(shortcut_path)
+        except Exception as e:
+            return False, str(e)
+
+    def _pin_app_to_taskbar_logic(self):
+        try:
+            import os
+            import sys
+            import shutil
+            import subprocess
+            from pathlib import Path
+            
+            # Ensure desktop shortcut exists first
+            success, path_or_err = self._create_desktop_shortcut_logic()
+            if not success:
+                return False, f"Failed to create desktop shortcut first: {path_or_err}"
+                
+            shortcut_path = Path(path_or_err)
+            if not shortcut_path.exists():
+                return False, "Shortcut file does not exist."
+                
+            powershell_exe = shutil.which("powershell.exe") or "powershell"
+            
+            # COM pin script
+            def _ps_escape(value: str) -> str:
+                return value.replace("'", "''")
+                
+            pin_script = "\n".join([
+                "$Shell = New-Object -ComObject Shell.Application",
+                f"$Folder = $Shell.NameSpace('{_ps_escape(str(shortcut_path.parent))}')",
+                f"$Item = $Folder.ParseName('{_ps_escape(shortcut_path.name)}')",
+                "$Verb = $Item.Verbs() | Where-Object { $_.Name.Replace('&', '') -match 'Pin to taskbar' }",
+                "if ($Verb) { $Verb.DoIt(); exit 0 } else { exit 1 }"
+            ])
+            
+            res = subprocess.run(
+                [powershell_exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", pin_script],
+                capture_output=True
+            )
+            
+            if res.returncode == 0:
+                return True, "Brahma AI has been pinned to your Taskbar!"
+            else:
+                return False, "Windows restricts programmatic taskbar pinning. Please right-click the 'Brahma Ai - Premium.lnk' shortcut on your Desktop and select 'Pin to taskbar', or drag it directly onto your taskbar."
+        except Exception as e:
+            return False, f"Error pinning to taskbar: {e}"
+
+class SmartDevicesSection(QFrame):
+    def __init__(self, controller=None, parent=None):
+        super().__init__(parent)
+        self._controller = controller
+        self._service = SmartHomeService()
+        self._snapshot = ""
+        self._device_tiles: list[_DeviceTile] = []
+        self._card_anims: list[QPropertyAnimation] = []
+        self._selected_device: dict[str, object] | None = None
+
+        self.setObjectName("SmartDevicesSection")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setStyleSheet(f"""
+            QFrame#SmartDevicesSection {{
+                background: transparent;
+                border: none;
+            }}
+            QLabel {{
+                background: transparent;
+            }}
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(6)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title_box = QVBoxLayout()
+        title_box.setSpacing(1)
+        self._title_lbl = QLabel("SMART DEVICES")
+        self._title_lbl.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        self._title_lbl.setStyleSheet(f"color: {C.WHITE}; letter-spacing: 1px;")
+        self._subtitle_lbl = QLabel("Quick access to your connected home devices.")
+        self._subtitle_lbl.setFont(QFont("Segoe UI", 8))
+        self._subtitle_lbl.setStyleSheet(f"color: {C.TEXT_DIM};")
+        title_box.addWidget(self._title_lbl)
+        title_box.addWidget(self._subtitle_lbl)
+        header.addLayout(title_box, 1)
+
+        self._count_chip = QLabel("0 devices")
+        self._count_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._count_chip.setStyleSheet(
+            f"QLabel {{ background: rgba(255,255,255,0.03); color: {C.PRI}; border: 1px solid rgba(255,255,255,0.07); border-radius: 10px; padding: 4px 10px; }}"
+        )
+        header.addWidget(self._count_chip)
+
+        self._refresh_btn = QPushButton("↻")
+        self._refresh_btn.setFixedSize(32, 32)
+        self._refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._refresh_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: rgba(255,255,255,0.03);
+                color: {C.WHITE};
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 9px;
+            }}
+            QPushButton:hover {{
+                background: rgba(255,69,69,0.08);
+                border: 1px solid {C.PRI};
+            }}
+        """)
+        self._refresh_btn.clicked.connect(lambda: self.refresh(force=True))
+        header.addWidget(self._refresh_btn)
+
+        self._open_home_btn = QPushButton("Add Device")
+        self._open_home_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._open_home_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: rgba(255,69,69,0.10);
+                color: {C.WHITE};
+                border: 1px solid {C.PRI};
+                border-radius: 9px;
+                padding: 0 14px;
+                min-height: 32px;
+            }}
+            QPushButton:hover {{
+                background: rgba(255,69,69,0.16);
+            }}
+        """)
+        self._open_home_btn.clicked.connect(self._open_brahma_home)
+        header.addWidget(self._open_home_btn)
+        root.addLayout(header)
+
+        self._empty_card = QWidget()
+        self._empty_card.setStyleSheet("background: transparent;")
+        empty_lay = QVBoxLayout(self._empty_card)
+        empty_lay.setContentsMargins(6, 4, 6, 4)
+        empty_lay.setSpacing(6)
+        empty_title = QLabel("No Smart Devices Connected")
+        empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        empty_title.setStyleSheet(f"color: {C.WHITE};")
+        empty_desc = QLabel("Connect your first smart device to control it directly from your dashboard.")
+        empty_desc.setWordWrap(True)
+        empty_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_desc.setFont(QFont("Segoe UI", 8))
+        empty_desc.setStyleSheet(f"color: {C.TEXT_DIM};")
+        empty_btn = QPushButton("Open Brahma Home")
+        empty_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        empty_btn.setFixedWidth(160)
+        empty_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: rgba(255,69,69,0.12);
+                color: {C.WHITE};
+                border: 1px solid {C.PRI};
+                border-radius: 10px;
+                min-height: 34px;
+            }}
+            QPushButton:hover {{
+                background: rgba(255,69,69,0.18);
+            }}
+        """)
+        empty_btn.clicked.connect(self._open_brahma_home)
+        empty_lay.addStretch(1)
+        empty_lay.addWidget(empty_title)
+        empty_lay.addWidget(empty_desc)
+        empty_lay.addWidget(empty_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
+        empty_lay.addStretch(1)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        self._grid_page = QWidget()
+        self._grid_page.setStyleSheet("background: transparent;")
+        self._grid_layout = QGridLayout(self._grid_page)
+        self._grid_layout.setContentsMargins(0, 0, 0, 0)
+        self._grid_layout.setHorizontalSpacing(12)
+        self._grid_layout.setVerticalSpacing(12)
+
+        self._row_page = QWidget()
+        self._row_page.setStyleSheet("background: transparent;")
+        self._row_layout = QHBoxLayout(self._row_page)
+        self._row_layout.setContentsMargins(0, 0, 0, 0)
+        self._row_layout.setSpacing(12)
+
+        self._cards_stack = QStackedWidget()
+        self._cards_stack.setStyleSheet("background: transparent; border: none;")
+        self._cards_stack.addWidget(self._grid_page)
+        self._cards_stack.addWidget(self._row_page)
+        self._scroll.setWidget(self._cards_stack)
+        root.addWidget(self._empty_card)
+        root.addWidget(self._scroll, 1)
+
+        self._panel = QFrame(self)
+        self._panel.setObjectName("SmartDevicePanel")
+        self._panel.setStyleSheet(f"""
+            QFrame#SmartDevicePanel {{
+                background: rgba(8, 9, 13, 245);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 18px;
+            }}
+            QLabel {{
+                background: transparent;
+            }}
+            QPushButton {{
+                background: rgba(255,255,255,0.03);
+                color: {C.WHITE};
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 10px;
+                padding: 0 10px;
+            }}
+            QPushButton:hover {{
+                background: rgba(255,69,69,0.08);
+                border: 1px solid {C.PRI};
+            }}
+        """)
+        self._panel.setVisible(False)
+        self._panel.setMinimumSize(280, 260)
+        self._panel_effect = QGraphicsOpacityEffect(self._panel)
+        self._panel_effect.setOpacity(0.0)
+        self._panel.setGraphicsEffect(self._panel_effect)
+        self._panel_lay = QVBoxLayout(self._panel)
+        self._panel_lay.setContentsMargins(14, 12, 14, 12)
+        self._panel_lay.setSpacing(8)
+
+        panel_top = QHBoxLayout()
+        panel_top.setSpacing(6)
+        self._panel_name = QLabel("Device")
+        self._panel_name.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        self._panel_name.setStyleSheet(f"color: {C.WHITE};")
+        panel_top.addWidget(self._panel_name, 1)
+        self._panel_close = QPushButton("X")
+        self._panel_close.setFixedSize(28, 28)
+        self._panel_close.clicked.connect(self._close_panel)
+        panel_top.addWidget(self._panel_close)
+        self._panel_lay.addLayout(panel_top)
+
+        self._panel_meta = QLabel("")
+        self._panel_meta.setWordWrap(True)
+        self._panel_meta.setStyleSheet(f"color: {C.TEXT_DIM};")
+        self._panel_lay.addWidget(self._panel_meta)
+
+        self._panel_status = QLabel("")
+        self._panel_status.setStyleSheet(f"color: {C.GREEN}; font-weight: 700;")
+        self._panel_lay.addWidget(self._panel_status)
+
+        self._panel_controls = QVBoxLayout()
+        self._panel_controls.setSpacing(10)
+        self._panel_lay.addLayout(self._panel_controls)
+        self._panel_lay.addStretch(1)
+
+        self._panel_actions = QHBoxLayout()
+        self._panel_actions.setSpacing(8)
+        self._panel_lay.addLayout(self._panel_actions)
+
+        self._panel_hint = QLabel("")
+        self._panel_hint.setWordWrap(True)
+        self._panel_hint.setStyleSheet(f"color: {C.TEXT_DIM};")
+        self._panel_lay.addWidget(self._panel_hint)
+
+        self._poll_tmr = QTimer(self)
+        self._poll_tmr.timeout.connect(lambda: self.refresh(force=False))
+        self._poll_tmr.start(2500)
+
+        self.refresh(force=True)
+
+    def _controller_bridge(self):
+        return self._controller
+
+    def _open_brahma_home(self):
+        bridge = self._controller_bridge()
+        if bridge and hasattr(bridge, "_set_page"):
+            bridge._set_page("home")
+
+    def _snapshot_devices(self, devices: list[dict[str, object]]) -> str:
+        payload = [
+            (
+                str(d.get("id", "")),
+                int(d.get("updated_at") or 0),
+                str(d.get("name", "")),
+                bool(d.get("is_on")),
+                str(d.get("room", "")),
+                str(d.get("device_type", "")),
+                str(d.get("manufacturer", "")),
+            )
+            for d in devices
+        ]
+        return json.dumps(payload, ensure_ascii=True, sort_keys=False)
+
+    def refresh(self, force: bool = False):
+        devices = self._service.list_devices()
+        snapshot = self._snapshot_devices(devices)
+        if not force and snapshot == self._snapshot:
+            return
+        self._snapshot = snapshot
+        self._count_chip.setText(f"{len(devices)} device(s)")
+        self._empty_card.setVisible(not devices)
+        self._scroll.setVisible(bool(devices))
+        self._rebuild_device_cards(devices)
+        if self._panel.isVisible() and self._selected_device:
+            device_id = str(self._selected_device.get("id", ""))
+            device = self._find_device(device_id)
+            if device:
+                self._selected_device = device
+                self._populate_panel(device)
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _rebuild_device_cards(self, devices: list[dict[str, object]]):
+        self._clear_layout(self._grid_layout)
+        self._clear_layout(self._row_layout)
+        self._device_tiles.clear()
+        self._card_anims.clear()
+
+        if not devices:
+            self._cards_stack.setCurrentIndex(0)
+            self._close_panel()
+            return
+
+        count = len(devices)
+        if count <= 3:
+            self._cards_stack.setCurrentIndex(1)
+            self._clear_layout(self._row_layout)
+            for idx, device in enumerate(devices):
+                tile = _DeviceTile(device)
+                tile.select_requested.connect(self._open_device_panel)
+                tile.action_requested.connect(self._apply_tile_action)
+                self._row_layout.addWidget(tile)
+                self._animate_card(tile, idx)
+                self._device_tiles.append(tile)
+            self._row_layout.addStretch(1)
+            self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        elif count <= 6:
+            self._cards_stack.setCurrentIndex(0)
+            columns = 3 if count > 3 else count
+            for idx, device in enumerate(devices):
+                tile = _DeviceTile(device)
+                tile.select_requested.connect(self._open_device_panel)
+                tile.action_requested.connect(self._apply_tile_action)
+                self._grid_layout.addWidget(tile, idx // columns, idx % columns)
+                self._animate_card(tile, idx)
+                self._device_tiles.append(tile)
+            last_row = (count - 1) // columns + 1
+            self._grid_layout.setRowStretch(last_row, 1)
+            self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        else:
+            self._cards_stack.setCurrentIndex(1)
+            self._clear_layout(self._row_layout)
+            for idx, device in enumerate(devices):
+                tile = _DeviceTile(device)
+                tile.select_requested.connect(self._open_device_panel)
+                tile.action_requested.connect(self._apply_tile_action)
+                self._row_layout.addWidget(tile)
+                self._animate_card(tile, idx)
+                self._device_tiles.append(tile)
+            self._row_layout.addStretch(1)
+            self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+    def _animate_card(self, widget: QWidget, index: int):
+        effect = QGraphicsOpacityEffect(widget)
+        effect.setOpacity(0.0)
+        widget.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, b"opacity", self)
+        anim.setDuration(220)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._card_anims.append(anim)
+        QTimer.singleShot(index * 45, anim.start)
+
+    def _device_id_from_input(self, device_or_id):
+        if isinstance(device_or_id, dict):
+            return str(device_or_id.get("id", ""))
+        return str(device_or_id or "")
+
+    def _find_device(self, device_id: str) -> dict[str, object] | None:
+        for device in self._service.list_devices():
+            if str(device.get("id", "")) == device_id:
+                return device
+        return None
+
+    def _apply_tile_action(self, device_id: str, action: str, payload: dict):
+        try:
+            self._service.execute_device_action(device_id, action, payload)
+        except Exception:
+            return
+        self.refresh(force=True)
+        device = self._find_device(device_id)
+        if device:
+            self._selected_device = device
+            self._open_device_panel(device)
+
+    def _open_device_panel(self, device_or_id):
+        try:
+            device_id = self._device_id_from_input(device_or_id)
+            device = self._find_device(device_id)
+            if not device:
+                return
+            self._selected_device = device
+            self._populate_panel(device)
+            self._show_panel()
+        except Exception:
+            return
+
+    def _show_panel(self):
+        try:
+            self._position_panel()
+            self._panel.setVisible(True)
+            self._panel.raise_()
+            self._panel_effect.setOpacity(1.0)
+        except Exception:
+            self._panel.hide()
+            self._panel_effect.setOpacity(0.0)
+
+    def _close_panel(self):
+        if not self._panel.isVisible():
+            return
+        self._panel.hide()
+        self._panel_effect.setOpacity(0.0)
+
+    def _clear_panel_controls(self):
+        self._clear_layout(self._panel_controls)
+        self._clear_layout(self._panel_actions)
+
+    def _populate_panel(self, device: dict[str, object]):
+        try:
+            self._clear_panel_controls()
+            self._clear_layout(self._panel_actions)
+            name = str(device.get("name", "Device"))
+            room = str(device.get("room", ""))
+            device_type = str(device.get("device_type", "device")).lower()
+            is_on = bool(device.get("is_on"))
+            traits = device.get("traits") if isinstance(device.get("traits"), dict) else {}
+
+            self._panel_name.setText(name)
+            self._panel_meta.setText(
+                f"Room: {room or 'Unassigned'}\nType: {device_type.title()}\nManufacturer: {device.get('manufacturer', '')}\nConnection: Connected"
+            )
+            self._panel_status.setText("ON" if is_on else "OFF")
+            self._panel_hint.setText("Click outside the panel to close.")
+
+            power_btn = QPushButton("Power")
+            power_btn.clicked.connect(lambda: self._apply_tile_action(str(device.get("id", "")), "power", {"is_on": not is_on}))
+            self._panel_actions.addWidget(power_btn)
+
+            forget_btn = QPushButton("Forget")
+            forget_btn.clicked.connect(lambda: self._forget_device(str(device.get("id", ""))))
+            self._panel_actions.addWidget(forget_btn)
+
+            rename_btn = QPushButton("Rename")
+            rename_btn.clicked.connect(lambda: self._rename_device(str(device.get("id", "")), name))
+            self._panel_actions.addWidget(rename_btn)
+
+            if device_type == "fan":
+                speed = int(traits.get("speed", 4) or 4)
+                lbl = QLabel(f"Speed {speed}")
+                lbl.setStyleSheet(f"color: {C.TEXT_MED};")
+                self._panel_controls.addWidget(lbl)
+                slider = QSlider(Qt.Orientation.Horizontal)
+                slider.setRange(1, 6)
+                slider.setValue(speed)
+                slider.valueChanged.connect(lambda value: self._apply_tile_action(str(device.get("id", "")), "speed", {"speed": value}))
+                self._panel_controls.addWidget(slider)
+            elif device_type == "light":
+                brightness = int(traits.get("brightness", 75) or 75)
+                lbl = QLabel(f"Brightness {brightness}%")
+                lbl.setStyleSheet(f"color: {C.TEXT_MED};")
+                self._panel_controls.addWidget(lbl)
+                slider = QSlider(Qt.Orientation.Horizontal)
+                slider.setRange(1, 100)
+                slider.setValue(brightness)
+                slider.valueChanged.connect(lambda value: self._apply_tile_action(str(device.get("id", "")), "brightness", {"brightness": value}))
+                self._panel_controls.addWidget(slider)
+                color_btn = QPushButton("Color")
+                color_btn.clicked.connect(lambda: self._pick_color(device))
+                self._panel_controls.addWidget(color_btn)
+            elif device_type == "ac":
+                temperature = int(traits.get("temperature", 24) or 24)
+                lbl = QLabel(f"Temperature {temperature}")
+                lbl.setStyleSheet(f"color: {C.TEXT_MED};")
+                self._panel_controls.addWidget(lbl)
+                slider = QSlider(Qt.Orientation.Horizontal)
+                slider.setRange(16, 30)
+                slider.setValue(temperature)
+                slider.valueChanged.connect(lambda value: self._apply_tile_action(str(device.get("id", "")), "temperature", {"temperature": value}))
+                self._panel_controls.addWidget(slider)
+            elif device_type in ("tv", "speaker"):
+                volume = int(traits.get("volume", 18) or 18)
+                lbl = QLabel(f"Volume {volume}")
+                lbl.setStyleSheet(f"color: {C.TEXT_MED};")
+                self._panel_controls.addWidget(lbl)
+                slider = QSlider(Qt.Orientation.Horizontal)
+                slider.setRange(0, 100)
+                slider.setValue(volume)
+                slider.valueChanged.connect(lambda value: self._apply_tile_action(str(device.get("id", "")), "volume", {"volume": value}))
+                self._panel_controls.addWidget(slider)
+            elif device_type == "plug":
+                usage = traits.get("energy_usage", traits.get("power_usage", "N/A"))
+                lbl = QLabel(f"Energy usage: {usage}")
+                lbl.setStyleSheet(f"color: {C.TEXT_MED};")
+                self._panel_controls.addWidget(lbl)
+            else:
+                lbl = QLabel("Primary controls are available from the card below.")
+                lbl.setWordWrap(True)
+                lbl.setStyleSheet(f"color: {C.TEXT_MED};")
+                self._panel_controls.addWidget(lbl)
+        except Exception:
+            return
+
+    def _pick_color(self, device: dict[str, object]):
+        color = QColorDialog.getColor(QColor("#ff4545"), self, "Pick Light Color")
+        if color.isValid():
+            self._apply_tile_action(str(device.get("id", "")), "color", {"color": color.name()})
+
+    def _rename_device(self, device_id: str, current_name: str):
+        new_name, ok = QInputDialog.getText(self, "Rename Device", "New name:", text=current_name)
+        if ok and new_name.strip():
+            try:
+                self._service.rename_device(device_id, new_name.strip())
+            except Exception:
+                return
+            self.refresh(force=True)
+
+    def _forget_device(self, device_id: str):
+        try:
+            self._service.forget_device(device_id)
+        except Exception:
+            return
+        self._close_panel()
+        self.refresh(force=True)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._panel.isVisible():
+            self._position_panel()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.refresh(force=True)
+
+    def _position_panel(self):
+        panel_w = min(330, max(270, int(self.width() * 0.28)))
+        panel_h = min(340, max(240, int(self.height() * 0.45)))
+        x = max(12, self.width() - panel_w - 12)
+        y = 12
+        self._panel.setGeometry(x, y, panel_w, panel_h)
+
 class _RootShim:
     def __init__(self, app: QApplication):
         self._app = app
@@ -8063,6 +8977,7 @@ class BrahmaUI:
         self._command_bar.submitted.connect(self._submit_command)
         self._command_bar.attach_clicked.connect(self._browse_attachment)
         self._command_bar.mic_clicked.connect(self._toggle_mute)
+        self._command_bar.developer_clicked.connect(self._open_developer_mode_dialog)
         self._workspace_sidebar.command_submitted.connect(self._submit_command)
         self._workspace_sidebar.attach_requested.connect(self._browse_attachment)
         self._workspace_sidebar.mic_requested.connect(self._toggle_mute)
@@ -8095,6 +9010,7 @@ class BrahmaUI:
         else:
             self._workspace_sidebar.hide_workspace(animate=False)
         self.set_dashboard_page(getattr(self._win, "_current_page", "dashboard") == "dashboard")
+        self._apply_developer_mode_ui()
         if show_immediately:
             self.show_main()
         self.root = _RootShim(self._app)
@@ -8157,6 +9073,34 @@ class BrahmaUI:
             settings = self._load_app_settings()
             settings["launcher_pos"] = [int(x), int(y)]
             self._save_app_settings(settings)
+        except Exception:
+            pass
+
+    def _open_developer_mode_dialog(self):
+        try:
+            dialog = DeveloperModeDialog(self._win, settings=self._load_app_settings())
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                settings = dialog.get_settings()
+                self._save_app_settings(settings)
+                self._apply_developer_mode_ui()
+        except Exception:
+            pass
+
+    def _apply_developer_mode_ui(self):
+        try:
+            settings = self._load_app_settings()
+            enabled = bool(settings.get("developer_mode_enabled", False))
+            workspace = str(settings.get("developer_mode_workspace", "")).strip()
+            if hasattr(self._win, "_developer_card") and hasattr(self._win, "_developer_status_lbl"):
+                if enabled:
+                    workspace_text = workspace or "No folder selected"
+                    self._win._developer_status_lbl.setText(
+                        f"Developer mode is on • {workspace_text}"
+                    )
+                    self._win._developer_card.show()
+                    self._win._developer_card.raise_()
+                else:
+                    self._win._developer_card.hide()
         except Exception:
             pass
 
@@ -8466,6 +9410,7 @@ class BrahmaUI:
             on_quit=self._app.quit,
             on_open_app=self.show_main,
             on_show_icon=self._show_floating_icon,
+            on_open_dev=self._open_developer_mode_dialog,
         )
         self._control_panel = panel
         self._position_control_panel(panel)
@@ -8610,6 +9555,15 @@ class BrahmaUI:
 
     def write_log(self, text: str):
         self._win._log_sig.emit(text)
+
+    def show_daily_briefing(self, text: str):
+        self._win.show_daily_briefing(text)
+
+    def hide_daily_briefing(self):
+        self._win.hide_daily_briefing()
+
+    def schedule_daily_briefing_hide(self):
+        self._win.schedule_daily_briefing_hide()
 
     def submit_external_command(self, text: str, source: str = "discord"):
         self._win.submit_command(text, source=source)

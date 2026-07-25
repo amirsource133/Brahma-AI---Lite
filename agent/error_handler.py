@@ -173,13 +173,10 @@ Return ONLY the Python code, no explanation."""
 
         return {
             "step":        step.get("step"),
-            "tool":        "code_helper",
+            "tool":        "claude_code",
             "description": f"Auto-fix for: {step.get('description')}",
             "parameters": {
-                "action":      "run",
                 "description": fix_suggestion,
-                "code":        code,
-                "language":    "python"
             },
             "depends_on": step.get("depends_on", []),
             "critical":   step.get("critical", False)

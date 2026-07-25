@@ -458,5 +458,261 @@ class KasaProvider(SmartHomeProvider):
         raise ValueError("Effect control is not supported by this Kasa device.")
 
 
+class HueProvider(SmartHomeProvider):
+    key = "hue"
+    name = "Philips Hue"
+    manufacturer = "Philips Hue"
+
+    def auth_fields(self) -> list[ProviderField]:
+        return [
+            ProviderField("bridge_ip", "Bridge IP Address", "Optional - bridge IP address"),
+            ProviderField("api_key", "API Key / Token", "Optional developer API key"),
+        ]
+
+    def authenticate(self, credentials: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "account_label": "Hue Bridge",
+            "credentials": dict(credentials)
+        }
+
+    def discover_devices(self, credentials: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "external_id": "hue_bulb_bedroom",
+                "name": "Bedroom Light",
+                "manufacturer": self.manufacturer,
+                "room": "Bedroom",
+                "device_type": "light",
+                "image_key": "light",
+                "is_on": False,
+                "traits": {
+                    "brightness": 70,
+                    "color_temp": 3000
+                }
+            }
+        ]
+
+    def execute(self, device: dict[str, Any], action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        traits = dict(device.get("traits") or {})
+        traits.update(payload)
+        is_on = bool(payload.get("is_on", device.get("is_on")))
+        detail = f"{device['name']} updated."
+        return {"is_on": is_on, "traits": traits, "detail": detail}
+
+
+class LgProvider(SmartHomeProvider):
+    key = "lg"
+    name = "LG ThinQ"
+    manufacturer = "LG"
+
+    def auth_fields(self) -> list[ProviderField]:
+        return [
+            ProviderField("username", "Email / Username", "LG ThinQ account email"),
+            ProviderField("password", "Password", "LG ThinQ password", secret=True),
+        ]
+
+    def authenticate(self, credentials: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "account_label": f"LG ThinQ ({credentials.get('username', 'Home')})",
+            "credentials": dict(credentials)
+        }
+
+    def discover_devices(self, credentials: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "external_id": "lg_tv_living_room",
+                "name": "Living Room TV",
+                "manufacturer": "LG WebOS",
+                "room": "Living Room",
+                "device_type": "tv",
+                "image_key": "tv",
+                "is_on": True,
+                "traits": {
+                    "volume": 18
+                }
+            }
+        ]
+
+    def execute(self, device: dict[str, Any], action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        traits = dict(device.get("traits") or {})
+        traits.update(payload)
+        is_on = bool(payload.get("is_on", device.get("is_on")))
+        detail = f"{device['name']} updated."
+        return {"is_on": is_on, "traits": traits, "detail": detail}
+
+
+class DaikinProvider(SmartHomeProvider):
+    key = "daikin"
+    name = "Daikin Smart AC"
+    manufacturer = "Daikin"
+
+    def auth_fields(self) -> list[ProviderField]:
+        return [
+            ProviderField("ip", "AC IP Address", "Optional local IP of AC unit"),
+            ProviderField("username", "Daikin Username", "Optional cloud account username"),
+            ProviderField("password", "Password", "Optional cloud password", secret=True),
+        ]
+
+    def authenticate(self, credentials: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "account_label": "Daikin AC Control",
+            "credentials": dict(credentials)
+        }
+
+    def discover_devices(self, credentials: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "external_id": "daikin_ac_bedroom",
+                "name": "Bedroom AC",
+                "manufacturer": "Daikin Inverter",
+                "room": "Bedroom",
+                "device_type": "ac",
+                "image_key": "ac",
+                "is_on": True,
+                "traits": {
+                    "temperature": 24,
+                    "mode": "Cool"
+                }
+            }
+        ]
+
+    def execute(self, device: dict[str, Any], action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        traits = dict(device.get("traits") or {})
+        traits.update(payload)
+        is_on = bool(payload.get("is_on", device.get("is_on")))
+        detail = f"{device['name']} updated."
+        return {"is_on": is_on, "traits": traits, "detail": detail}
+
+
+class TuyaProvider(SmartHomeProvider):
+    key = "tuya"
+    name = "Tuya / Smart Life"
+    manufacturer = "Tuya"
+
+    def auth_fields(self) -> list[ProviderField]:
+        return [
+            ProviderField("access_id", "Access ID / Client ID", "Tuya IoT platform developer ID"),
+            ProviderField("secret", "Access Secret / Client Secret", "Tuya IoT access secret key", secret=True),
+        ]
+
+    def authenticate(self, credentials: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "account_label": "Tuya Cloud",
+            "credentials": dict(credentials)
+        }
+
+    def discover_devices(self, credentials: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "external_id": "tuya_plug_study",
+                "name": "Study Room Plug",
+                "manufacturer": "TP-Link Kasa",
+                "room": "Study Room",
+                "device_type": "plug",
+                "image_key": "plug",
+                "is_on": False,
+                "traits": {}
+            }
+        ]
+
+    def execute(self, device: dict[str, Any], action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        traits = dict(device.get("traits") or {})
+        traits.update(payload)
+        is_on = bool(payload.get("is_on", device.get("is_on")))
+        detail = f"{device['name']} updated."
+        return {"is_on": is_on, "traits": traits, "detail": detail}
+
+
+class NestProvider(SmartHomeProvider):
+    key = "nest"
+    name = "Nest / Google Home"
+    manufacturer = "Google Nest"
+
+    def auth_fields(self) -> list[ProviderField]:
+        return [
+            ProviderField("project_id", "Project ID", "Nest device access project ID"),
+            ProviderField("client_secret", "Client Secret", "Nest OAuth client secret", secret=True),
+        ]
+
+    def authenticate(self, credentials: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "account_label": "Google Nest",
+            "credentials": dict(credentials)
+        }
+
+    def discover_devices(self, credentials: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "external_id": "nest_thermostat_hall",
+                "name": "Hall Thermostat",
+                "manufacturer": "Google Nest",
+                "room": "Hall",
+                "device_type": "ac",
+                "image_key": "ac",
+                "is_on": True,
+                "traits": {
+                    "temperature": 22,
+                    "mode": "Eco"
+                }
+            }
+        ]
+
+    def execute(self, device: dict[str, Any], action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        traits = dict(device.get("traits") or {})
+        traits.update(payload)
+        is_on = bool(payload.get("is_on", device.get("is_on")))
+        detail = f"{device['name']} updated."
+        return {"is_on": is_on, "traits": traits, "detail": detail}
+
+
+class SmartThingsProvider(SmartHomeProvider):
+    key = "smartthings"
+    name = "Samsung SmartThings"
+    manufacturer = "Samsung SmartThings"
+
+    def auth_fields(self) -> list[ProviderField]:
+        return [
+            ProviderField("token", "Access Token", "SmartThings personal access token", secret=True),
+        ]
+
+    def authenticate(self, credentials: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "account_label": "Samsung SmartThings",
+            "credentials": dict(credentials)
+        }
+
+    def discover_devices(self, credentials: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "external_id": "smartthings_sensor_balcony",
+                "name": "Balcony Sensor",
+                "manufacturer": "Samsung SmartThings",
+                "room": "Balcony",
+                "device_type": "sensor",
+                "image_key": "sensor",
+                "is_on": True,
+                "traits": {
+                    "battery": 88
+                }
+            }
+        ]
+
+    def execute(self, device: dict[str, Any], action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        traits = dict(device.get("traits") or {})
+        traits.update(payload)
+        is_on = bool(payload.get("is_on", device.get("is_on")))
+        detail = f"{device['name']} updated."
+        return {"is_on": is_on, "traits": traits, "detail": detail}
+
+
 def built_in_provider_classes() -> list[type[SmartHomeProvider]]:
-    return [AtombergProvider, KasaProvider]
+    return [
+        AtombergProvider,
+        KasaProvider,
+        HueProvider,
+        LgProvider,
+        DaikinProvider,
+        TuyaProvider,
+        NestProvider,
+        SmartThingsProvider
+    ]

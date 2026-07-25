@@ -34,3 +34,4 @@ cryptography
 qrcode[pil]
 python-multipart
 PyQt6
+edge-tts

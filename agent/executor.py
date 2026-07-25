@@ -195,13 +195,11 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
         from actions.cmd_control import cmd_control
         return cmd_control(parameters=parameters, player=None) or "Done."
 
-    elif tool == "code_helper":
-        from actions.code_helper import code_helper
-        return code_helper(parameters=parameters, player=None, speak=speak) or "Done."
-
-    elif tool == "dev_agent":
-        from actions.dev_agent import dev_agent
-        return dev_agent(parameters=parameters, player=None, speak=speak) or "Done."
+    elif tool == "claude_code":
+        from actions.claude_code_bridge import run_developer_mode_request
+        claude_parameters = dict(parameters or {})
+        claude_parameters.setdefault("workspace_path", str(Path.cwd()))
+        return run_developer_mode_request(claude_parameters, speak=speak)
 
     elif tool == "screen_process":
         from actions.screen_processor import screen_process
@@ -240,18 +238,18 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
         description = parameters.get("description", "")
         if not description:
             raise ValueError("generated_code requires a 'description' parameter.")
-        return _run_generated_code(description, speak=speak)
+        from actions.claude_code_bridge import run_developer_mode_request
+        return run_developer_mode_request(
+            {"description": description, "workspace_path": str(Path.cwd())},
+            speak=speak,
+        )
 
     elif tool == "flight_finder":
         from actions.flight_finder import flight_finder
         return flight_finder(parameters=parameters, player=None, speak=speak) or "Done."
-    elif tool == "website_builder":
-        from actions.website_builder import website_builder
-        return website_builder(parameters=parameters, player=None) or "Done."
-
     else:
-        print(f"[Executor] ⚠️ Unknown tool '{tool}' — falling back to generated_code")
-        return _run_generated_code(f"Accomplish this task: {parameters}", speak=speak)
+        print(f"[Executor] ⚠️ Unknown tool '{tool}' — no developer fallback is configured")
+        return f"Unknown action: {tool}"
 
 class AgentExecutor:
 

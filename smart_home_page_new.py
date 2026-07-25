@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from PyQt6.QtCore import QEasingCurve, QDateTime, QPropertyAnimation, QRect, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QPixmap, QColor
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -22,6 +22,8 @@ from PyQt6.QtWidgets import (
     QStackedWidget,
     QVBoxLayout,
     QWidget,
+    QSizePolicy,
+    QGraphicsDropShadowEffect,
 )
 
 from smart_home import SmartHomeService
@@ -58,16 +60,19 @@ class ClickableFrame(QFrame):
 
 def _panel_style(border_alpha: int = 34) -> str:
     return (
-        f"QFrame {{ background: rgba(12,12,14,245); "
-        f"border: 1px solid rgba(255,69,69,{border_alpha}); border-radius: 18px; }}"
+        "QFrame { "
+        "background: rgba(10,12,18,245); "
+        "border: 1px solid rgba(255,255,255,0.06); "
+        "border-radius: 18px; "
+        "}"
     )
 
 
 def _soft_button_style() -> str:
     return (
-        f"QPushButton {{ background: rgba(255,255,255,0.04); color: {TEXT}; "
+        f"QPushButton {{ background: rgba(255,255,255,0.03); color: {TEXT}; "
         "border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 0 12px; }}"
-        f"QPushButton:hover {{ border: 1px solid {ACCENT}; }}"
+        f"QPushButton:hover {{ border: 1px solid {ACCENT}; background: rgba(255,69,69,0.08); }}"
     )
 
 
@@ -81,7 +86,7 @@ class AddDeviceDialog(QDialog):
         self._result: dict[str, Any] = {}
         self._fields: dict[str, QLineEdit] = {}
         self._checks: list[tuple[str, QCheckBox]] = []
-        self._platform_buttons: list[QPushButton] = []
+        self._platform_buttons: list[ClickableFrame] = []
 
         self.setWindowTitle("Add Device")
         self.setModal(True)
@@ -154,6 +159,18 @@ class AddDeviceDialog(QDialog):
         lay.addWidget(lbl)
         return frame
 
+    def _brand_glyph(self, key: str) -> str:
+        return {
+            "atomberg": "🌀",
+            "kasa": "🔌",
+            "hue": "💡",
+            "lg": "📺",
+            "daikin": "❄️",
+            "tuya": "⚙️",
+            "nest": "🏠",
+            "smartthings": "📡"
+        }.get(key, "⚙️")
+
     def _build_platform_page(self) -> QWidget:
         page = QWidget()
         lay = QVBoxLayout(page)
@@ -166,31 +183,77 @@ class AddDeviceDialog(QDialog):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(10)
+        
         for idx, platform in enumerate(self._platforms()):
-            btn = QPushButton(platform.name + ("" if platform.available else " (Coming Soon)"))
-            btn.setCheckable(True)
-            btn.setEnabled(platform.available)
-            btn.setMinimumHeight(46)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(
-                f"""
-                QPushButton {{
-                    text-align: left;
-                    background: rgba(255,255,255,0.03);
-                    color: {TEXT};
-                    border: 1px solid rgba(255,255,255,0.08);
-                    border-radius: 12px;
-                    padding: 8px 12px;
-                }}
-                QPushButton:checked {{
-                    background: {ACCENT_SOFT};
-                    border: 1px solid {ACCENT};
-                }}
-                """
-            )
-            btn.clicked.connect(lambda _=False, key=platform.key, label=platform.name: self._choose_provider(key, label))
-            self._platform_buttons.append(btn)
-            grid.addWidget(btn, idx // 2, idx % 2)
+            card = ClickableFrame()
+            card.setObjectName(f"PlatformCard_{platform.key}")
+            card.setCursor(Qt.CursorShape.PointingHandCursor)
+            
+            lay_c = QHBoxLayout(card)
+            lay_c.setContentsMargins(14, 12, 14, 12)
+            lay_c.setSpacing(12)
+            
+            badge = QLabel(self._brand_glyph(platform.key))
+            badge.setFixedSize(36, 36)
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge.setFont(QFont("Segoe UI", 13))
+            
+            badge_style = {
+                "atomberg": "background: rgba(53, 255, 117, 0.08); color: #35ff75; border: 1px solid rgba(53, 255, 117, 0.2); border-radius: 18px;",
+                "kasa": "background: rgba(0, 180, 216, 0.08); color: #00b4d8; border: 1px solid rgba(0, 180, 216, 0.2); border-radius: 18px;",
+                "hue": "background: rgba(255, 165, 0, 0.08); color: #ffa500; border: 1px solid rgba(255, 165, 0, 0.2); border-radius: 18px;",
+                "lg": "background: rgba(165, 0, 165, 0.08); color: #a500a5; border: 1px solid rgba(165, 0, 165, 0.2); border-radius: 18px;",
+                "daikin": "background: rgba(123, 211, 247, 0.08); color: #7bd3f7; border: 1px solid rgba(123, 211, 247, 0.2); border-radius: 18px;",
+                "tuya": "background: rgba(255, 90, 95, 0.08); color: #ff5a5f; border: 1px solid rgba(255, 90, 95, 0.2); border-radius: 18px;",
+                "nest": "background: rgba(255, 255, 255, 0.05); color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 18px;",
+                "smartthings": "background: rgba(0, 100, 255, 0.08); color: #0064ff; border: 1px solid rgba(0, 100, 255, 0.2); border-radius: 18px;",
+            }.get(platform.key, "background: rgba(255, 255, 255, 0.05); color: #ffffff; border-radius: 18px;")
+            badge.setStyleSheet(badge_style)
+            lay_c.addWidget(badge)
+            
+            text_lay = QVBoxLayout()
+            text_lay.setSpacing(2)
+            
+            p_name = QLabel(platform.name)
+            p_name.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            p_name.setStyleSheet("color: #ffffff; border: none;")
+            
+            subtitle = {
+                "atomberg": "Ceiling fans & smart air flow",
+                "kasa": "Plugs, switches, & smart sockets",
+                "hue": "Smart lights, strips, & hue sync",
+                "lg": "LG webOS smart TVs & apps",
+                "daikin": "Split ACs & climate controls",
+                "tuya": "IoT switches & generic appliances",
+                "nest": "Thermostats & home security",
+                "smartthings": "Samsung hub & IoT integrations",
+            }.get(platform.key, "Smart home cloud connection")
+            p_sub = QLabel(subtitle)
+            p_sub.setFont(QFont("Segoe UI", 8))
+            p_sub.setStyleSheet("color: rgba(255, 255, 255, 0.45); border: none;")
+            
+            text_lay.addWidget(p_name)
+            text_lay.addWidget(p_sub)
+            lay_c.addLayout(text_lay, 1)
+            
+            card.setMinimumHeight(64)
+            card.setStyleSheet("""
+                QFrame {
+                    background: rgba(255, 255, 255, 0.02);
+                    border: 1px solid rgba(255, 255, 255, 0.06);
+                    border-radius: 14px;
+                }
+                QFrame:hover {
+                    background: rgba(255, 69, 69, 0.04);
+                    border: 1px solid rgba(255, 69, 69, 0.3);
+                }
+            """)
+            
+            # Setup lambda for click
+            card.clicked.connect(lambda key=platform.key, label=platform.name: self._choose_provider(key, label))
+            self._platform_buttons.append(card)
+            grid.addWidget(card, idx // 2, idx % 2)
+            
         lay.addWidget(grid_host)
         return page
 
@@ -259,13 +322,39 @@ class AddDeviceDialog(QDialog):
         return [
             PlatformRow("atomberg", "Atomberg Home", True, [("api_key", "API Key", "Atomberg developer API key", False), ("refresh_token", "Refresh Token", "Atomberg refresh token", True)]),
             PlatformRow("kasa", "TP-Link Kasa", True, [("host", "Device IP / Host", "Optional - leave empty to scan the network", False), ("username", "Username", "Optional cloud username", False), ("password", "Password", "Optional cloud password", True)]),
+            PlatformRow("hue", "Philips Hue", True, [("bridge_ip", "Bridge IP Address", "Optional - bridge IP address", False), ("api_key", "API Key / Token", "Optional developer API key", False)]),
+            PlatformRow("lg", "LG ThinQ", True, [("username", "Email / Username", "LG ThinQ account email", False), ("password", "Password", "LG ThinQ password", True)]),
+            PlatformRow("daikin", "Daikin Smart AC", True, [("ip", "AC IP Address", "Optional local IP of AC unit", False), ("username", "Daikin Username", "Optional cloud account username", False), ("password", "Password", "Optional cloud password", True)]),
+            PlatformRow("tuya", "Tuya / Smart Life", True, [("access_id", "Access ID / Client ID", "Tuya IoT platform developer ID", False), ("secret", "Access Secret / Client Secret", "Tuya IoT access secret key", True)]),
+            PlatformRow("nest", "Nest / Google Home", True, [("project_id", "Project ID", "Nest device access project ID", False), ("client_secret", "Client Secret", "Nest OAuth client secret", True)]),
+            PlatformRow("smartthings", "Samsung SmartThings", True, [("token", "Access Token", "SmartThings personal access token", True)]),
         ]
 
     def _choose_provider(self, key: str, label: str):
         self._provider_key = key
         self._provider_label = label
-        for btn in self._platform_buttons:
-            btn.setChecked(btn.text().startswith(label))
+        for card in self._platform_buttons:
+            is_selected = card.objectName() == f"PlatformCard_{key}"
+            if is_selected:
+                card.setStyleSheet(f"""
+                    QFrame {{
+                        background: rgba(255, 69, 69, 0.08);
+                        border: 1.5px solid {ACCENT};
+                        border-radius: 14px;
+                    }}
+                """)
+            else:
+                card.setStyleSheet("""
+                    QFrame {
+                        background: rgba(255, 255, 255, 0.02);
+                        border: 1px solid rgba(255, 255, 255, 0.06);
+                        border-radius: 14px;
+                    }
+                    QFrame:hover {
+                        background: rgba(255, 69, 69, 0.04);
+                        border: 1px solid rgba(255, 69, 69, 0.3);
+                    }
+                """)
         self._build_auth_form()
         self._stack.setCurrentIndex(1)
         self._sync_buttons()
@@ -364,131 +453,239 @@ class _DeviceTile(ClickableFrame):
     def __init__(self, device: dict[str, Any], parent=None):
         super().__init__(parent)
         self.device = device
+        self.setObjectName("DeviceTileFrame")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet(_panel_style(32))
-        self.setMinimumHeight(250)
+        
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.setMinimumHeight(180)
+        self.setMaximumHeight(194)
+        
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 16, 16, 16)
-        lay.setSpacing(10)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(4)
 
-        top = QHBoxLayout()
-        badge = QLabel(self._glyph(str(device.get("device_type", "device"))))
-        badge.setFixedSize(56, 56)
-        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
-        badge.setStyleSheet(f"background: {ACCENT_SOFT}; color: {TEXT}; border: 1px solid {ACCENT_LINE}; border-radius: 28px;")
-        top.addWidget(badge)
-        meta = QVBoxLayout()
-        name = QLabel(str(device.get("name", "Device")))
-        name.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
-        name.setStyleSheet(f"color: {TEXT};")
-        manufacturer = QLabel(str(device.get("manufacturer", "")))
-        manufacturer.setStyleSheet(f"color: {TEXT_DIM};")
-        meta.addWidget(name)
-        meta.addWidget(manufacturer)
-        top.addLayout(meta, 1)
-        self._power_chip = QLabel("ON" if device.get("is_on") else "OFF")
-        self._power_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._power_chip.setStyleSheet(f"color: {'#35ff75' if device.get('is_on') else TEXT_DIM}; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 5px 10px;")
-        top.addWidget(self._power_chip)
-        lay.addLayout(top)
-
-        self._detail_lbl = QLabel("")
-        self._detail_lbl.setWordWrap(True)
-        self._detail_lbl.setStyleSheet(f"color: {TEXT_MED};")
-        lay.addWidget(self._detail_lbl)
-
+        # Header Row (Power Button in top right)
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.addStretch(1)
+        
+        self.power_btn = QPushButton("⏻")
+        self.power_btn.setFixedSize(26, 26)
+        self.power_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.power_btn.setFont(QFont("Segoe UI", 10))
+        
+        is_on = bool(device.get("is_on"))
+        self.power_btn.clicked.connect(lambda: self.action_requested.emit(str(self.device.get("id", "")), "power", {"is_on": not is_on}))
+        header_row.addWidget(self.power_btn)
+        lay.addLayout(header_row)
+        
+        # Product Image Center Container
+        self.img_lbl = QLabel()
+        self.img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.img_lbl.setFixedHeight(58)
+        
+        kind = str(device.get("device_type", "device")).lower()
+        img_path = f"assets/{kind}.jpg"
+        from pathlib import Path
+        if Path(img_path).exists():
+            pix = QPixmap(img_path).scaled(88, 58, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            self.img_lbl.setPixmap(pix)
+        else:
+            self.img_lbl.setText(self._glyph(kind))
+            self.img_lbl.setFont(QFont("Segoe UI", 18))
+            self.img_lbl.setStyleSheet("color: #ffffff;")
+        lay.addWidget(self.img_lbl)
+        
+        # Device details
+        self.name_lbl = QLabel(str(device.get("name", "Device")))
+        self.name_lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.name_lbl.setStyleSheet("color: #ffffff;")
+        
+        self.sub_lbl = QLabel(str(device.get("manufacturer", "")))
+        self.sub_lbl.setFont(QFont("Segoe UI", 8))
+        self.sub_lbl.setStyleSheet(f"color: {TEXT_DIM};")
+        
+        lay.addWidget(self.name_lbl)
+        lay.addWidget(self.sub_lbl)
+        
+        # Controls area
         self._control_area = QVBoxLayout()
-        self._control_area.setSpacing(8)
+        self._control_area.setSpacing(3)
+        self._control_area.setContentsMargins(0, 0, 0, 0)
         lay.addLayout(self._control_area)
         self._build_controls()
+        
+        self.set_active(False)
 
     def _glyph(self, kind: str) -> str:
-        return {"fan": "F", "light": "L", "ac": "A", "tv": "TV", "plug": "P", "sensor": "S", "curtain": "C", "vacuum": "V"}.get(kind, "D")
-
-    def _chip_style(self) -> str:
-        return f"QPushButton {{ background: rgba(255,255,255,0.03); color: {TEXT}; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 0 12px; }} QPushButton:hover {{ border: 1px solid {ACCENT}; }}"
+        return {"fan": "🌀", "light": "💡", "ac": "❄️", "tv": "📺", "plug": "🔌", "sensor": "📡", "curtain": "🪟", "vacuum": "🧹"}.get(kind, "⚙️")
 
     def _make_slider(self, minv: int, maxv: int, value: int) -> QSlider:
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setRange(minv, maxv)
         slider.setValue(value)
-        slider.setStyleSheet(f"QSlider::groove:horizontal {{ background: rgba(255,255,255,0.08); height: 6px; border-radius: 3px; }} QSlider::handle:horizontal {{ background: {ACCENT}; width: 18px; margin: -6px 0; border-radius: 9px; }}")
+        slider.setCursor(Qt.CursorShape.SplitHCursor)
+        slider.setStyleSheet(f"""
+            QSlider::groove:horizontal {{
+                background: rgba(255, 255, 255, 0.1);
+                height: 4px;
+                border-radius: 2px;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: #ff4545;
+                border-radius: 2px;
+            }}
+            QSlider::handle:horizontal {{
+                background: #ffffff;
+                width: 10px;
+                height: 10px;
+                margin-top: -3px;
+                margin-bottom: -3px;
+                border-radius: 5px;
+            }}
+        """)
         return slider
 
     def _build_controls(self):
-        kind = str(self.device.get("device_type", "device"))
-        self._detail_lbl.setText({
-            "fan": "Speed controls, sleep mode, and timer.",
-            "light": "Brightness and color controls.",
-            "ac": "Temperature and mode controls.",
-            "tv": "Volume, mute, and input controls.",
-            "plug": "Power control and live status.",
-        }.get(kind, "Primary controls available."))
-        row = QHBoxLayout()
-        self._power_btn = QPushButton("Power")
-        self._power_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._power_btn.setFixedHeight(34)
-        self._power_btn.clicked.connect(lambda: self.action_requested.emit(str(self.device["id"]), "power", {"is_on": not bool(self.device.get("is_on"))}))
-        self._power_btn.setStyleSheet(f"QPushButton {{ background: rgba(255,69,69,0.12); color: {TEXT}; border: 1px solid rgba(255,69,69,0.30); border-radius: 10px; padding: 0 14px; }} QPushButton:hover {{ background: rgba(255,69,69,0.18); }}")
-        row.addWidget(self._power_btn)
+        kind = str(self.device.get("device_type", "device")).lower()
+        is_on = bool(self.device.get("is_on"))
+        traits = self.device.get("traits") if isinstance(self.device.get("traits"), dict) else {}
+        
         if kind == "fan":
-            for value in range(1, 6):
-                btn = QPushButton(str(value))
-                btn.setFixedSize(34, 34)
-                btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                btn.clicked.connect(lambda _=False, v=value: self.action_requested.emit(str(self.device["id"]), "speed", {"speed": v}))
-                btn.setStyleSheet(self._chip_style())
-                row.addWidget(btn)
+            current_speed = traits.get("speed", 4)
+            try:
+                current_speed = int(current_speed)
+            except Exception:
+                current_speed = 4
+                
+            self.val_lbl = QLabel(f"Speed {current_speed}" if is_on else "Off")
+            self.val_lbl.setFont(QFont("Segoe UI", 8))
+            self.val_lbl.setStyleSheet("color: rgba(255, 255, 255, 0.6);")
+            self._control_area.addWidget(self.val_lbl)
+            
+            # Segment Speed Indicators
+            seg_row = QHBoxLayout()
+            seg_row.setSpacing(4)
+            seg_row.addStretch(0)
+            for s in range(1, 6):
+                seg = QFrame()
+                seg.setFixedHeight(5)
+                seg.setFixedWidth(24)
+                if is_on and s <= current_speed:
+                    seg.setStyleSheet("background: #ff4545; border-radius: 2.5px;")
+                else:
+                    seg.setStyleSheet("background: rgba(255, 255, 255, 0.15); border-radius: 2.5px;")
+                seg_row.addWidget(seg)
+            seg_row.addStretch(1)
+            self._control_area.addLayout(seg_row)
+            
         elif kind == "light":
-            self._slider = self._make_slider(0, 100, int(self.device.get("traits", {}).get("brightness", 60)))
-            self._slider.valueChanged.connect(lambda value: self.action_requested.emit(str(self.device["id"]), "brightness", {"brightness": value}))
-            self._control_area.addWidget(self._slider)
-            color_btn = QPushButton("Color")
-            color_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            color_btn.setFixedHeight(34)
-            color_btn.setStyleSheet(self._chip_style())
-            row.addWidget(color_btn)
-        elif kind == "ac":
-            self._slider = self._make_slider(16, 30, int(self.device.get("traits", {}).get("temperature", 24)))
-            self._slider.valueChanged.connect(lambda value: self.action_requested.emit(str(self.device["id"]), "temperature", {"temperature": value}))
-            self._control_area.addWidget(self._slider)
-            mode_btn = QPushButton("Mode")
-            mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            mode_btn.setFixedHeight(34)
-            mode_btn.setStyleSheet(self._chip_style())
-            mode_btn.clicked.connect(lambda: self.action_requested.emit(str(self.device["id"]), "mode", {"mode": "Cool"}))
-            row.addWidget(mode_btn)
+            try:
+                current_brightness = int(traits.get("brightness", 70))
+            except Exception:
+                current_brightness = 70
+            self.val_lbl = QLabel(f"Brightness {current_brightness}%" if is_on else "Off")
+            self.val_lbl.setFont(QFont("Segoe UI", 8))
+            self.val_lbl.setStyleSheet("color: rgba(255, 255, 255, 0.6);")
+            self._control_area.addWidget(self.val_lbl)
+            
         elif kind == "tv":
-            self._slider = self._make_slider(0, 100, int(self.device.get("traits", {}).get("volume", 18)))
-            self._slider.valueChanged.connect(lambda value: self.action_requested.emit(str(self.device["id"]), "volume", {"volume": value}))
-            self._control_area.addWidget(self._slider)
-            mute_btn = QPushButton("Mute")
-            mute_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            mute_btn.setFixedHeight(34)
-            mute_btn.setStyleSheet(self._chip_style())
-            input_btn = QPushButton("Input")
-            input_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            input_btn.setFixedHeight(34)
-            input_btn.setStyleSheet(self._chip_style())
-            row.addWidget(mute_btn)
-            row.addWidget(input_btn)
+            status_row = QHBoxLayout()
+            on_lbl = QLabel("On" if is_on else "Off")
+            on_lbl.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+            on_lbl.setStyleSheet(f"color: {GREEN};" if is_on else f"color: {TEXT_DIM};")
+            status_row.addWidget(on_lbl)
+            
+            if is_on:
+                try:
+                    current_vol = int(traits.get("volume", 18))
+                except Exception:
+                    current_vol = 18
+                vol_lbl = QLabel(f"Volume {current_vol}")
+                vol_lbl.setFont(QFont("Segoe UI", 8))
+                vol_lbl.setStyleSheet("color: rgba(255, 255, 255, 0.6);")
+                status_row.addWidget(vol_lbl)
+                status_row.addStretch(1)
+                self._control_area.addLayout(status_row)
+                
+                # Volume track slider
+                self.slider = self._make_slider(0, 100, current_vol)
+                self.slider.valueChanged.connect(lambda value: self.action_requested.emit(str(self.device.get("id", "")), "volume", {"volume": value}))
+                self._control_area.addWidget(self.slider)
+            else:
+                status_row.addStretch(1)
+                self._control_area.addLayout(status_row)
+                
+        elif kind == "ac":
+            try:
+                current_temp = int(traits.get("temperature", 24))
+            except Exception:
+                current_temp = 24
+            temp_lbl = QLabel(f"{current_temp}°C" if is_on else "Off")
+            temp_lbl.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+            temp_lbl.setStyleSheet("color: #7bd3f7;" if is_on else f"color: {TEXT_DIM};")
+            self._control_area.addWidget(temp_lbl)
+            
+            if is_on:
+                tags_row = QHBoxLayout()
+                tags_row.setSpacing(6)
+                cool_lbl = QLabel("❄️ Cool")
+                cool_lbl.setFont(QFont("Segoe UI", 8))
+                cool_lbl.setStyleSheet("color: rgba(255, 255, 255, 0.7); background: rgba(255, 255, 255, 0.05); border-radius: 4px; padding: 2px 6px;")
+                
+                fan_lbl = QLabel("🌀 Fan Auto")
+                fan_lbl.setFont(QFont("Segoe UI", 8))
+                fan_lbl.setStyleSheet("color: rgba(255, 255, 255, 0.7); background: rgba(255, 255, 255, 0.05); border-radius: 4px; padding: 2px 6px;")
+                
+                tags_row.addWidget(cool_lbl)
+                tags_row.addWidget(fan_lbl)
+                tags_row.addStretch(1)
+                self._control_area.addLayout(tags_row)
+                
         elif kind == "plug":
-            usage = QLabel(f"Energy usage: {self.device.get('traits', {}).get('energy_usage', '0W')}")
-            usage.setStyleSheet(f"color: {TEXT_DIM};")
-            self._control_area.addWidget(usage)
+            self.val_lbl = QLabel("On" if is_on else "Off")
+            self.val_lbl.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+            self.val_lbl.setStyleSheet(f"color: {GREEN};" if is_on else f"color: {TEXT_DIM};")
+            self._control_area.addWidget(self.val_lbl)
+            
         else:
             self._control_area.addWidget(QLabel("No additional controls."))
-        self._control_area.addLayout(row)
 
     def set_active(self, active: bool):
-        self.setStyleSheet(f"QFrame {{ background: {'rgba(255,69,69,0.08)' if active else 'rgba(12,12,14,245)'}; border: 1px solid {'rgba(255,69,69,0.35)' if active else 'rgba(255,69,69,0.16)'}; border-radius: 18px; }}")
-        self._power_chip.setStyleSheet(f"color: {'#35ff75' if self.device.get('is_on') else TEXT_DIM}; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 5px 10px;")
+        if active:
+            self.setStyleSheet(f"""
+                QFrame#DeviceTileFrame {{
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #12141d, stop:1 #08090e);
+                    border: 1.5px solid {ACCENT};
+                    border-radius: 18px;
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                QFrame#DeviceTileFrame {{
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0f111a, stop:1 #07080b);
+                    border: 1px solid rgba(255, 255, 255, 0.06);
+                    border-radius: 18px;
+                }}
+                QFrame#DeviceTileFrame:hover {{
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #141726, stop:1 #0a0b12);
+                    border: 1px solid rgba(255, 69, 69, 0.35);
+                }}
+            """)
+            
+        is_on = bool(self.device.get("is_on"))
+        if is_on:
+            self.power_btn.setStyleSheet("QPushButton { color: #35ff75; background: rgba(53, 255, 117, 0.08); border: 1px solid rgba(53, 255, 117, 0.25); border-radius: 15px; } QPushButton:hover { background: rgba(53, 255, 117, 0.15); }")
+        else:
+            self.power_btn.setStyleSheet("QPushButton { color: rgba(255, 255, 255, 0.4); background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 15px; } QPushButton:hover { border: 1px solid rgba(255, 255, 255, 0.15); background: rgba(255, 255, 255, 0.06); }")
 
     def mousePressEvent(self, event):
         super().mousePressEvent(event)
         if event.button() == Qt.MouseButton.LeftButton:
-            self.select_requested.emit(str(self.device["id"]))
+            device_id = self.device.get("id")
+            if device_id is None:
+                return
+            self.select_requested.emit(str(device_id))
 
 
 class BrahmaHomePage(QWidget):
@@ -511,18 +708,85 @@ class BrahmaHomePage(QWidget):
         root.setSpacing(14)
 
         self._main_frame = QFrame()
-        self._main_frame.setStyleSheet(_panel_style(40))
+        self._main_frame.setStyleSheet(
+            "QFrame {"
+            "background: #020305;"
+            "border: 1px solid #14161f;"
+            "border-radius: 24px;"
+            "}"
+        )
         main_lay = QVBoxLayout(self._main_frame)
-        main_lay.setContentsMargins(18, 18, 18, 18)
+        main_lay.setContentsMargins(20, 20, 20, 20)
         main_lay.setSpacing(14)
         root.addWidget(self._main_frame, 1)
 
         self._build_header(main_lay)
-        self._build_my_devices(main_lay)
+
+        # Split layout for body: Devices (Left) + Recent Activity Feed (Right)
+        self._body_layout = QHBoxLayout()
+        self._body_layout.setSpacing(16)
+        
+        # Left side: Devices container
+        self._left_container = QWidget()
+        self._left_lay = QVBoxLayout(self._left_container)
+        self._left_lay.setContentsMargins(0, 0, 0, 0)
+        self._left_lay.setSpacing(10)
+        self._build_my_devices(self._left_lay)
+        self._body_layout.addWidget(self._left_container, 3)
+        
+        # Recent Activity panel
+        self._right_container = QFrame()
+        self._right_container.setObjectName("ActivityPanel")
+        self._right_container.setStyleSheet(f"""
+            QFrame#ActivityPanel {{
+                background: rgba(8, 9, 13, 0.88);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 16px;
+            }}
+        """)
+        self._right_lay = QVBoxLayout(self._right_container)
+        self._right_lay.setContentsMargins(16, 16, 16, 16)
+        self._right_lay.setSpacing(12)
+        
+        act_title = QLabel("RECENT ACTIVITY")
+        act_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        act_title.setStyleSheet(f"color: {TEXT}; letter-spacing: 1px;")
+        self._right_lay.addWidget(act_title)
+        
+        act_scroll = QScrollArea()
+        act_scroll.setWidgetResizable(True)
+        act_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        act_scroll.setStyleSheet("background: transparent; border: none;")
+        
+        act_host = QWidget()
+        act_host.setStyleSheet("background: transparent;")
+        self._activity_list = QVBoxLayout(act_host)
+        self._activity_list.setContentsMargins(0, 0, 0, 0)
+        self._activity_list.setSpacing(8)
+        self._activity_list.addStretch(1)
+        
+        act_scroll.setWidget(act_host)
+        self._right_lay.addWidget(act_scroll, 1)
+        
+        # Link button: View All Activity
+        self._view_all_act_btn = QPushButton("View All Activity  >")
+        self._view_all_act_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._view_all_act_btn.setStyleSheet(f"QPushButton {{ background: transparent; color: {ACCENT}; border: none; font-size: 11px; font-weight: bold; text-align: left; padding-left: 4px; }} QPushButton:hover {{ color: #ff6b6b; }}")
+        self._right_lay.addWidget(self._view_all_act_btn)
+        
+        self._body_layout.addWidget(self._right_container, 1)
+        main_lay.addLayout(self._body_layout, 1)
 
         self._drawer = self._build_drawer()
         self._drawer.hide()
 
+        self._refresh()
+
+    def refresh(self):
+        self._refresh()
+
+    def showEvent(self, event):
+        super().showEvent(event)
         self._refresh()
 
     def _section_card(self, title: str) -> QFrame:
@@ -554,14 +818,14 @@ class BrahmaHomePage(QWidget):
         text.addWidget(title)
         text.addWidget(subtitle)
         row.addLayout(text, 1)
-        self._status_chip = QLabel("  Home Connected\n  Online")
-        self._status_chip.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self._status_chip.setStyleSheet(f"QLabel {{ background: rgba(12,12,14,235); color: {TEXT}; border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 12px 16px; min-width: 120px; }}")
+        self._status_chip = QLabel()
+        self._status_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._status_chip.setStyleSheet(f"QLabel {{ background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 6px 14px; min-width: 110px; }}")
         row.addWidget(self._status_chip)
         self._voice_button = QPushButton("▮▮")
-        self._voice_button.setFixedSize(64, 64)
+        self._voice_button.setFixedSize(48, 48)
         self._voice_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._voice_button.setStyleSheet(f"QPushButton {{ background: rgba(12,12,14,235); color: {TEXT}; border: 1px solid rgba(255,255,255,0.10); border-radius: 32px; font-size: 22px; }} QPushButton:hover {{ border: 1px solid {ACCENT}; }}")
+        self._voice_button.setStyleSheet(f"QPushButton {{ background: rgba(255, 255, 255, 0.02); color: {TEXT}; border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; font-size: 16px; }} QPushButton:hover {{ border: 1px solid {ACCENT}; background: rgba(255,69,69,0.08); }}")
         self._voice_button.clicked.connect(self._toggle_voice_mode)
         row.addWidget(self._voice_button)
         lay.addLayout(row)
@@ -648,82 +912,160 @@ class BrahmaHomePage(QWidget):
 
     def _build_voice_control_card(self) -> QFrame:
         frame = QFrame()
-        frame.setStyleSheet(_panel_style(32))
-        lay = QVBoxLayout(frame)
-        lay.setContentsMargins(16, 14, 16, 14)
-        lay.setSpacing(8)
-        head = QLabel("VOICE CONTROL")
-        head.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        head.setStyleSheet(f"color: {TEXT};")
-        lay.addWidget(head)
-        self._wake_lbl = QLabel("Wake word\nBrahma")
-        self._wake_lbl.setStyleSheet(f"color: {TEXT_DIM};")
-        lay.addWidget(self._wake_lbl)
-        self._voice_state_small = QLabel("Idle")
-        self._voice_state_small.setStyleSheet(f"color: {ACCENT}; font-weight: 700;")
-        lay.addWidget(self._voice_state_small)
-        self._voice_small_wave = QHBoxLayout()
-        self._voice_small_wave.setSpacing(3)
-        self._voice_small_bars: list[QFrame] = []
-        for _ in range(18):
-            bar = QFrame()
-            bar.setFixedSize(4, 10)
-            bar.setStyleSheet("background: rgba(255,69,69,0.20); border-radius: 2px;")
-            self._voice_small_wave.addWidget(bar)
-            self._voice_small_bars.append(bar)
-        lay.addLayout(self._voice_small_wave)
-        self._voice_button_big = QPushButton("🎤")
-        self._voice_button_big.setFixedSize(84, 84)
-        self._voice_button_big.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._voice_button_big.setStyleSheet(f"QPushButton {{ background: rgba(255,69,69,0.12); color: {TEXT}; border: 2px solid rgba(255,69,69,0.55); border-radius: 42px; font-size: 28px; }} QPushButton:hover {{ background: rgba(255,69,69,0.18); }}")
-        self._voice_button_big.clicked.connect(self._toggle_voice_mode)
-        lay.addWidget(self._voice_button_big, alignment=Qt.AlignmentFlag.AlignRight)
+        frame.setObjectName("VoiceControlCard")
+        frame.setStyleSheet(f"""
+            QFrame#VoiceControlCard {{
+                background: rgba(255, 255, 255, 0.01);
+                border: 1px solid rgba(255, 255, 255, 0.05);
+                border-radius: 16px;
+            }}
+        """)
+        lay = QHBoxLayout(frame)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(12)
+        
+        left = QVBoxLayout()
+        left.setSpacing(6)
+        
+        title = QLabel("VOICE CONTROL")
+        title.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {TEXT}; letter-spacing: 1px;")
+        left.addWidget(title)
+        
+        wake_lay = QVBoxLayout()
+        wake_lay.setSpacing(2)
+        lbl = QLabel("Wake word")
+        lbl.setFont(QFont("Segoe UI", 9))
+        lbl.setStyleSheet(f"color: {TEXT_DIM};")
+        
+        word = QLabel("Brahma")
+        word.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        word.setStyleSheet(f"color: {ACCENT};")
+        
+        wake_lay.addWidget(lbl)
+        wake_lay.addWidget(word)
+        left.addLayout(wake_lay)
+        lay.addLayout(left, 1)
+        
+        # Micro wave button on right
+        mic_btn = QPushButton("🎙️")
+        mic_btn.setFixedSize(38, 38)
+        mic_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        mic_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: rgba(255,69,69,0.08);
+                color: {TEXT};
+                border: 1px solid rgba(255,69,69,0.3);
+                border-radius: 19px;
+                font-size: 14px;
+            }}
+            QPushButton:hover {{
+                background: rgba(255,69,69,0.18);
+                border: 1px solid {ACCENT};
+            }}
+        """)
+        mic_btn.clicked.connect(self._toggle_voice_mode)
+        lay.addWidget(mic_btn, alignment=Qt.AlignmentFlag.AlignVCenter)
+        
         return frame
 
     def _build_drawer(self) -> QFrame:
         drawer = QFrame(self)
-        drawer.setStyleSheet(_panel_style(44))
+        drawer.setObjectName("DetailsDrawerFrame")
+        drawer.setStyleSheet("""
+            QFrame#DetailsDrawerFrame {
+                background: rgba(8, 9, 13, 0.88);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 20px;
+            }
+        """)
         drawer.setGeometry(0, 0, 0, 0)
         lay = QVBoxLayout(drawer)
         lay.setContentsMargins(16, 14, 16, 14)
         lay.setSpacing(10)
+        
         top = QHBoxLayout()
         title = QLabel("DEVICE DETAILS")
         title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {TEXT};")
         top.addWidget(title)
         top.addStretch(1)
+        
         close_btn = QPushButton("X")
         close_btn.setFixedSize(32, 32)
         close_btn.clicked.connect(self._close_drawer)
         close_btn.setStyleSheet(_soft_button_style())
         top.addWidget(close_btn)
         lay.addLayout(top)
+        
+        card_style = """
+            QFrame {
+                background: rgba(13, 15, 19, 235);
+                border: 1px solid rgba(255, 255, 255, 0.05);
+                border-radius: 14px;
+            }
+            QLabel {
+                background: transparent;
+                border: none;
+            }
+        """
+        
+        # 1. Name Card
+        self._name_card = QFrame()
+        self._name_card.setStyleSheet(card_style)
+        nc_lay = QVBoxLayout(self._name_card)
+        nc_lay.setContentsMargins(14, 14, 14, 14)
         self._drawer_name = QLabel("")
         self._drawer_name.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
-        self._drawer_name.setStyleSheet(f"color: {TEXT};")
-        lay.addWidget(self._drawer_name)
+        self._drawer_name.setStyleSheet("color: #ffffff; border: none;")
+        nc_lay.addWidget(self._drawer_name)
+        lay.addWidget(self._name_card)
+        
+        # 2. Meta Card
+        self._meta_card = QFrame()
+        self._meta_card.setStyleSheet(card_style)
+        mc_lay = QVBoxLayout(self._meta_card)
+        mc_lay.setContentsMargins(14, 14, 14, 14)
         self._drawer_meta = QLabel("")
-        self._drawer_meta.setStyleSheet(f"color: {TEXT_DIM};")
-        self._drawer_meta.setWordWrap(True)
-        lay.addWidget(self._drawer_meta)
+        self._drawer_meta.setStyleSheet("border: none;")
+        mc_lay.addWidget(self._drawer_meta)
+        lay.addWidget(self._meta_card)
+        
+        # 3. State Card
+        self._state_card = QFrame()
+        self._state_card.setStyleSheet(card_style)
+        sc_lay = QVBoxLayout(self._state_card)
+        sc_lay.setContentsMargins(14, 14, 14, 14)
         self._drawer_state = QLabel("")
-        self._drawer_state.setStyleSheet(f"color: {TEXT_MED}; font-weight: 700;")
-        lay.addWidget(self._drawer_state)
+        self._drawer_state.setStyleSheet("border: none;")
+        sc_lay.addWidget(self._drawer_state)
+        lay.addWidget(self._state_card)
+        
+        # 4. Info Card
+        self._info_card = QFrame()
+        self._info_card.setStyleSheet(card_style)
+        ic_lay = QVBoxLayout(self._info_card)
+        ic_lay.setContentsMargins(14, 14, 14, 14)
         self._drawer_info = QLabel("")
-        self._drawer_info.setWordWrap(True)
-        self._drawer_info.setStyleSheet(f"color: {TEXT_MED};")
-        lay.addWidget(self._drawer_info)
+        self._drawer_info.setStyleSheet("border: none;")
+        ic_lay.addWidget(self._drawer_info)
+        lay.addWidget(self._info_card)
+        
+        lay.addStretch(1)
+        
         self._drawer_actions = QHBoxLayout()
+        self._drawer_actions.setSpacing(8)
         lay.addLayout(self._drawer_actions)
         return drawer
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self._drawer.isVisible():
-            width = min(360, max(300, int(self.width() * 0.28)))
+            width = min(390, max(330, int(self.width() * 0.28)))
             self._drawer.setGeometry(self.width() - width - 12, 12, width, self.height() - 24)
         self._reflow_devices()
+        
+        pass
 
     def _device_columns(self) -> int:
         viewport = self._device_scroll.viewport().width() if hasattr(self, "_device_scroll") else 0
@@ -762,26 +1104,63 @@ class BrahmaHomePage(QWidget):
         self._drawer_anim.start()
 
     def _open_drawer(self, device: dict[str, Any]):
-        self._selected_device_id = str(device.get("id"))
+        self._selected_device_id = str(device.get("id", ""))
         self._drawer_name.setText(str(device.get("name", "Device")))
-        self._drawer_meta.setText(
-            f"Manufacturer: {device.get('manufacturer', '')}\nRoom: {device.get('room', '')}\nConnection: Local\nLast Updated: now"
-        )
-        traits = device.get("traits") or {}
-        self._drawer_state.setText(f"Power: {'On' if device.get('is_on') else 'Off'}")
-        self._drawer_info.setText(
-            f"Firmware: {traits.get('firmware', 'Current')}\nMAC: {traits.get('mac', 'Local')}\nIP: {traits.get('ip', 'Local')}\nBattery: {traits.get('battery', 'N/A')}\nPower Consumption: {traits.get('energy_usage', traits.get('power_usage', 'N/A'))}"
-        )
+        
+        self._drawer_meta.setText(f"""
+            <div style='line-height: 140%;'>
+                <span style='color: rgba(255,255,255,0.45); font-size: 10pt;'>Manufacturer:</span> <span style='color: #ffffff; font-weight: bold; font-size: 10pt;'>{device.get('manufacturer', '')}</span><br>
+                <span style='color: rgba(255,255,255,0.45); font-size: 10pt;'>Room:</span> <span style='color: #ffffff; font-weight: bold; font-size: 10pt;'>{device.get('room', '')}</span><br>
+                <span style='color: rgba(255,255,255,0.45); font-size: 10pt;'>Connection:</span> <span style='color: #35ff75; font-weight: bold; font-size: 10pt;'>Local</span><br>
+                <span style='color: rgba(255,255,255,0.45); font-size: 10pt;'>Last Updated:</span> <span style='color: rgba(255,255,255,0.7); font-size: 10pt;'>now</span>
+            </div>
+        """)
+        
+        traits = device.get("traits") if isinstance(device.get("traits"), dict) else {}
+        is_on = bool(device.get("is_on"))
+        state_color = "#35ff75" if is_on else "rgba(255,255,255,0.4)"
+        self._drawer_state.setText(f"""
+            <div style='line-height: 140%;'>
+                <span style='color: rgba(255,255,255,0.45); font-size: 10pt;'>Power:</span> <span style='color: {state_color}; font-weight: bold; font-size: 10pt;'>{'On' if is_on else 'Off'}</span>
+            </div>
+        """)
+        
+        self._drawer_info.setText(f"""
+            <div style='line-height: 140%;'>
+                <span style='color: rgba(255,255,255,0.45); font-size: 10pt;'>Firmware:</span> <span style='color: #ffffff; font-weight: bold; font-size: 10pt;'>{traits.get('firmware', 'Current')}</span><br>
+                <span style='color: rgba(255,255,255,0.45); font-size: 10pt;'>MAC:</span> <span style='color: #ffffff; font-weight: bold; font-size: 10pt;'>{traits.get('mac', 'Local')}</span><br>
+                <span style='color: rgba(255,255,255,0.45); font-size: 10pt;'>IP:</span> <span style='color: #ffffff; font-weight: bold; font-size: 10pt;'>{traits.get('ip', 'Local')}</span><br>
+                <span style='color: rgba(255,255,255,0.45); font-size: 10pt;'>Battery:</span> <span style='color: #ffffff; font-weight: bold; font-size: 10pt;'>{traits.get('battery', 'N/A')}</span><br>
+                <span style='color: rgba(255,255,255,0.45); font-size: 10pt;'>Power Consumption:</span> <span style='color: #ffffff; font-weight: bold; font-size: 10pt;'>{traits.get('energy_usage', traits.get('power_usage', 'N/A'))}</span>
+            </div>
+        """)
+        
         while self._drawer_actions.count():
             item = self._drawer_actions.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        for text, slot in (("Rename", self._rename_selected), ("Restart", self._restart_selected), ("Forget Device", self._forget_selected)):
+                
+        for text, slot in (("Rename", self._rename_selected), ("Restart", self._restart_selected), ("Forget", self._forget_selected)):
             btn = QPushButton(text)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setFixedHeight(34)
             btn.clicked.connect(slot)
-            btn.setStyleSheet(_soft_button_style())
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: rgba(255,255,255,0.03);
+                    color: {TEXT};
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 8px;
+                    font-size: 11px;
+                    font-weight: bold;
+                    padding: 0 8px;
+                }}
+                QPushButton:hover {{
+                    background: rgba(255, 69, 69, 0.08);
+                    border: 1px solid {ACCENT};
+                    color: #ffffff;
+                }}
+            """)
             self._drawer_actions.addWidget(btn)
         self._animate_drawer(True)
 
@@ -815,7 +1194,25 @@ class BrahmaHomePage(QWidget):
     def _refresh(self):
         devices = self._service.list_devices()
         self._refresh_devices(devices)
-        self._status_chip.setText("  Home Connected\n  Online" if devices else "  Home Connected\n  Ready")
+        self._refresh_activity()
+        
+        if devices:
+            status_html = (
+                "<div style='line-height: 1.3;'>"
+                "<span style='color: rgba(255,255,255,0.4); font-size: 10px; font-weight: bold;'>SYSTEM</span><br/>"
+                "<span style='color: #35ff75; font-size: 12px; font-weight: bold;'>●</span> "
+                "<span style='color: #ffffff; font-size: 11px; font-weight: bold;'>Connected</span>"
+                "</div>"
+            )
+        else:
+            status_html = (
+                "<div style='line-height: 1.3;'>"
+                "<span style='color: rgba(255,255,255,0.4); font-size: 10px; font-weight: bold;'>SYSTEM</span><br/>"
+                "<span style='color: #ffcc00; font-size: 12px; font-weight: bold;'>●</span> "
+                "<span style='color: #ffffff; font-size: 11px; font-weight: bold;'>Ready</span>"
+                "</div>"
+            )
+        self._status_chip.setText(status_html)
         self._empty_state.setVisible(not devices)
         self._device_scroll.setVisible(bool(devices))
 
@@ -825,6 +1222,11 @@ class BrahmaHomePage(QWidget):
             if item.widget():
                 item.widget().deleteLater()
         self._device_tiles.clear()
+        
+        # Reset row stretches
+        for r in range(self._device_grid.rowCount() + 1):
+            self._device_grid.setRowStretch(r, 0)
+            
         if not devices:
             return
         columns = self._device_columns()
@@ -836,6 +1238,10 @@ class BrahmaHomePage(QWidget):
             tile.set_active(str(device.get("id")) == self._selected_device_id)
             self._device_grid.addWidget(tile, idx // columns, idx % columns)
             self._device_tiles.append(tile)
+            
+        # Add stretch on the last row to absorb extra vertical space
+        last_row = (len(devices) - 1) // columns + 1
+        self._device_grid.setRowStretch(last_row, 1)
 
     def _refresh_activity(self):
         while self._activity_list.count():
@@ -847,26 +1253,60 @@ class BrahmaHomePage(QWidget):
             empty = QLabel("No recent activity yet.")
             empty.setStyleSheet(f"color: {TEXT_DIM};")
             self._activity_list.addWidget(empty)
+            self._activity_list.addStretch(1)
             return
+            
         for row in self._activity_items:
             item = QFrame()
-            item.setStyleSheet("QFrame { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; }")
+            item.setStyleSheet("QFrame { background: transparent; border: none; }")
             box = QHBoxLayout(item)
-            box.setContentsMargins(10, 8, 10, 8)
-            box.setSpacing(8)
-            time_lbl = QLabel(QDateTime.fromMSecsSinceEpoch(int(row["created_at"])).toString("h:mm AP"))
-            time_lbl.setStyleSheet(f"color: {TEXT_DIM};")
+            box.setContentsMargins(4, 4, 4, 4)
+            box.setSpacing(12)
+            
+            # Timestamp (e.g. 12:08 PM)
+            time_str = QDateTime.fromMSecsSinceEpoch(int(row["created_at"])).toString("h:mm AP")
+            time_lbl = QLabel(time_str)
+            time_lbl.setFont(QFont("Segoe UI", 9))
+            time_lbl.setStyleSheet(f"color: {TEXT_DIM}; min-width: 60px;")
             box.addWidget(time_lbl)
+            
+            # Icon Badge
+            kind = str(row.get("device_type", "device")).lower()
+            badge = QLabel(self._activity_glyph(kind))
+            badge.setFixedSize(32, 32)
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge.setFont(QFont("Segoe UI", 11))
+            
+            badge_style = {
+                "fan": "background: rgba(53, 255, 117, 0.08); color: #35ff75; border: 1px solid rgba(53, 255, 117, 0.25); border-radius: 16px;",
+                "light": "background: rgba(255, 165, 0, 0.08); color: #ffa500; border: 1px solid rgba(255, 165, 0, 0.25); border-radius: 16px;",
+                "ac": "background: rgba(123, 211, 247, 0.08); color: #7bd3f7; border: 1px solid rgba(123, 211, 247, 0.25); border-radius: 16px;",
+                "tv": "background: rgba(0, 180, 216, 0.08); color: #00b4d8; border: 1px solid rgba(0, 180, 216, 0.25); border-radius: 16px;",
+                "plug": "background: rgba(255, 255, 255, 0.05); color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 16px;",
+            }.get(kind, "background: rgba(255, 255, 255, 0.05); color: #ffffff; border-radius: 16px;")
+            badge.setStyleSheet(badge_style)
+            box.addWidget(badge)
+            
+            # Details Text
             text_box = QVBoxLayout()
+            text_box.setSpacing(2)
             title = QLabel(str(row["title"]))
-            title.setStyleSheet(f"color: {TEXT}; font-weight: 700;")
+            title.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            title.setStyleSheet("color: #ffffff;")
+            
             detail = QLabel(str(row["detail"]))
-            detail.setWordWrap(True)
+            detail.setFont(QFont("Segoe UI", 9))
             detail.setStyleSheet(f"color: {TEXT_DIM};")
             text_box.addWidget(title)
             text_box.addWidget(detail)
+            
             box.addLayout(text_box, 1)
             self._activity_list.addWidget(item)
+            
+        self._activity_list.addStretch(1)
+
+    def _activity_glyph(self, kind: str) -> str:
+        return {"fan": "🌀", "light": "💡", "ac": "❄️", "tv": "📺", "plug": "🔌"}.get(kind, "⚙️")
 
     def _on_tile_selected(self, device_id: str):
         device = self._service.get_device(device_id)
@@ -905,16 +1345,20 @@ class BrahmaHomePage(QWidget):
 
     def _animate_voice(self):
         self._voice_phase += 1
-        for idx, bar in enumerate(self._wave_bars):
-            height = 8 + int(18 * abs(((self._voice_phase + idx) % 14) - 7) / 7)
-            bar.setFixedHeight(max(8, min(40, height)))
-            bar.setStyleSheet(f"background: {'rgba(255,69,69,0.55)' if self._voice_state in ('Listening', 'Executing') else 'rgba(255,255,255,0.18)'}; border-radius: 2px;")
-        for idx, bar in enumerate(self._voice_small_bars):
-            height = 6 + int(10 * abs(((self._voice_phase + idx) % 10) - 5) / 5)
-            bar.setFixedHeight(max(6, min(24, height)))
-            bar.setStyleSheet(f"background: {'rgba(255,69,69,0.35)' if self._voice_state in ('Listening', 'Executing') else 'rgba(255,255,255,0.15)'}; border-radius: 2px;")
-        self._voice_cmd_lbl.setText({"Idle": '"Brahma"', "Listening": '"Turn bedroom fan to speed 4"', "Thinking": '"Understanding..."', "Executing": '"Applying command..."', "Completed": '"Done"'}.get(self._voice_state, '"Brahma"'))
-        self._mic_orb.setText("🎤" if self._voice_state in ("Listening", "Executing") else "◉")
+        if hasattr(self, "_wave_bars") and self._wave_bars:
+            for idx, bar in enumerate(self._wave_bars):
+                height = 8 + int(18 * abs(((self._voice_phase + idx) % 14) - 7) / 7)
+                bar.setFixedHeight(max(8, min(40, height)))
+                bar.setStyleSheet(f"background: {'rgba(255,69,69,0.55)' if self._voice_state in ('Listening', 'Executing') else 'rgba(255,255,255,0.18)'}; border-radius: 2px;")
+        if hasattr(self, "_voice_small_bars") and self._voice_small_bars:
+            for idx, bar in enumerate(self._voice_small_bars):
+                height = 6 + int(10 * abs(((self._voice_phase + idx) % 10) - 5) / 5)
+                bar.setFixedHeight(max(6, min(24, height)))
+                bar.setStyleSheet(f"background: {'rgba(255,69,69,0.35)' if self._voice_state in ('Listening', 'Executing') else 'rgba(255,255,255,0.15)'}; border-radius: 2px;")
+        if hasattr(self, "_voice_cmd_lbl") and self._voice_cmd_lbl:
+            self._voice_cmd_lbl.setText({"Idle": '"Brahma"', "Listening": '"Turn bedroom fan to speed 4"', "Thinking": '"Understanding..."', "Executing": '"Applying command..."', "Completed": '"Done"'}.get(self._voice_state, '"Brahma"'))
+        if hasattr(self, "_mic_orb") and self._mic_orb:
+            self._mic_orb.setText("🎙️" if self._voice_state in ("Listening", "Executing") else "🎙️")
 
     def _open_add_device(self):
         dialog = AddDeviceDialog(self._service, self)
